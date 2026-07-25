@@ -3,6 +3,16 @@
   "serverVersion": "0.2.0",
   "tools": [
     {
+      "name": "get_runtime_status",
+      "description": "Read the connected game's product, Unity version, play state, and authoritative turn.",
+      "command": "runtime.status",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "get_pending_master_requests",
       "description": "List role-play requests awaiting an external MCP-compatible Agent.",
       "command": "master.get_pending",
