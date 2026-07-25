@@ -1,0 +1,31 @@
+{
+  "serverName": "example-game-runtime",
+  "serverVersion": "0.1.0",
+  "tools": [
+    {
+      "name": "runtime_status",
+      "description": "Read the connected game runtime status.",
+      "command": "runtime.status",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "submit_action",
+      "description": "Submit one action using a game-owned decision key.",
+      "command": "turn.submit",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "decision": { "type": "object" },
+          "actionId": { "type": "string" },
+          "idempotencyKey": { "type": "string" }
+        },
+        "required": ["decision", "actionId", "idempotencyKey"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+[project]
+name = "game-runtime-mcp-host"
+version = "0.1.0"
+description = "Dependency-free MCP stdio host for token-authenticated localhost game runtime adapters"
+requires-python = ">=3.10"
+
+[project.scripts]
+game-runtime-mcp-host = "game_runtime_mcp_host:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["game_runtime_mcp_host"]
+package-dir = {"" = "src"}
