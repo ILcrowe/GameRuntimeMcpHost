@@ -1,0 +1,67 @@
+{
+  "serverName": "story-runtime-mcp",
+  "serverVersion": "0.2.0",
+  "tools": [
+    {
+      "name": "get_pending_master_requests",
+      "description": "List role-play requests awaiting an external MCP-compatible Agent.",
+      "command": "master.get_pending",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_master_request",
+      "description": "Read one compact provider-neutral master request.",
+      "command": "master.get_request",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "requestId": { "type": "string" }
+        },
+        "required": ["requestId"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "submit_master_response",
+      "description": "Submit narration for one master request. clientName is observational only.",
+      "command": "master.submit_response",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "requestId": { "type": "string" },
+          "sessionId": { "type": "string" },
+          "revision": { "type": "integer" },
+          "idempotencyKey": { "type": "string" },
+          "narration": { "type": "string" },
+          "dialogue": { "type": "string" },
+          "clientName": { "type": "string" }
+        },
+        "required": [
+          "requestId",
+          "sessionId",
+          "revision",
+          "idempotencyKey",
+          "narration"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_master_result",
+      "description": "Read the accepted or fallback result for a master request.",
+      "command": "master.get_result",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "requestId": { "type": "string" }
+        },
+        "required": ["requestId"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

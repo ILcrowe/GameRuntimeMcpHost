@@ -51,6 +51,11 @@ Host는 endpoint가 loopback 주소가 아니면 연결을 거부합니다. 토�
 도구 이름과 게임 RPC command의 매핑은 게임이 소유한 manifest로 주입합니다.
 [examples/tools.example.json](examples/tools.example.json)을 참고하세요.
 
+외부 게임 마스터의 provider-neutral 예시는
+[`examples/storyllmmaster.tools.json`](examples/storyllmmaster.tools.json)에 있습니다.
+`clientName`은 관측 정보일 뿐 권한 판정에 사용하지 않으며 Codex, Claude Code,
+그 밖의 MCP 호환 Agent가 같은 계약을 사용할 수 있습니다.
+
 ## 경계
 
 - 포함: MCP initialize/ping/tools, localhost RPC, token 전달, bounded timeout
