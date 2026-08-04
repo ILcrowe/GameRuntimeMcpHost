@@ -56,6 +56,11 @@ Host는 endpoint가 loopback 주소가 아니면 연결을 거부합니다. 토�
 `clientName`은 관측 정보일 뿐 권한 판정에 사용하지 않으며 Codex, Claude Code,
 그 밖의 MCP 호환 Agent가 같은 계약을 사용할 수 있습니다.
 
+LLM·캐릭터 대화 런타임용 manifest는
+[`examples/rune-agent-bridge.tools.json`](examples/rune-agent-bridge.tools.json)에 있습니다.
+전역 Runtime 토큰과 별도로 `join_conversation`이 발급한 참여자 토큰을
+`wait_turn`, `submit_action`, `read_events`, `leave_conversation`에 전달합니다.
+
 ## 경계
 
 - 포함: MCP initialize/ping/tools, localhost RPC, token 전달, bounded timeout

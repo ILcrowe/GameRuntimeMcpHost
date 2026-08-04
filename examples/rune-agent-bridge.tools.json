@@ -1,0 +1,203 @@
+{
+  "serverName": "rune-agent-bridge-runtime",
+  "serverVersion": "0.1.0",
+  "tools": [
+    {
+      "name": "rune_bridge_status",
+      "description": "Read the RuneAgentBridge runtime protocol status.",
+      "command": "runtime.status",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "create_conversation",
+      "description": "Create an autonomous or scene-guided conversation with at least two participants.",
+      "command": "conversation.create",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "mode": { "type": "string", "enum": ["autonomous", "scene_guided"] },
+          "participants": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "properties": {
+                "participantId": { "type": "string" },
+                "displayName": { "type": "string" },
+                "provider": { "type": "string" },
+                "personaRef": { "type": "string" }
+              },
+              "required": ["displayName", "provider"],
+              "additionalProperties": false
+            }
+          },
+          "policy": {
+            "type": "object",
+            "properties": {
+              "maxTurns": { "type": "integer", "minimum": 1 },
+              "maxConsecutiveSpeaks": { "type": "integer", "minimum": 1 },
+              "contextWindowEvents": { "type": "integer", "minimum": 1 }
+            },
+            "additionalProperties": false
+          },
+          "scene": {
+            "type": "object",
+            "properties": {
+              "objective": { "type": "string" },
+              "roles": { "type": "object" },
+              "publicContext": { "type": "string" },
+              "privateContext": { "type": "object" },
+              "stopConditions": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["objective"],
+            "additionalProperties": false
+          },
+          "initialSpeakerId": { "type": "string" }
+        },
+        "required": ["participants"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "join_conversation",
+      "description": "Join a configured pull participant and receive its scoped participant token.",
+      "command": "conversation.join",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "sessionId": { "type": "string" }, "participantId": { "type": "string" } },
+        "required": ["sessionId", "participantId"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "wait_turn",
+      "description": "Wait up to eight seconds for this participant's next turn or conversation completion.",
+      "command": "conversation.wait_turn",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string" },
+          "participantId": { "type": "string" },
+          "participantToken": { "type": "string" },
+          "cursor": { "type": "integer", "minimum": 0 },
+          "timeoutSeconds": { "type": "number", "minimum": 0, "maximum": 8 }
+        },
+        "required": ["sessionId", "participantId", "participantToken", "cursor"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "submit_action",
+      "description": "Submit one idempotent action for the current turn.",
+      "command": "conversation.submit_action",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string" },
+          "participantId": { "type": "string" },
+          "participantToken": { "type": "string" },
+          "actionId": { "type": "string" },
+          "action": { "type": "string", "enum": ["speak", "pass", "leave", "request_participant", "request_stop"] },
+          "content": { "type": "string" },
+          "recipients": { "type": "array", "items": { "type": "string" } },
+          "requestedParticipantId": { "type": "string" },
+          "replyTo": { "type": "string" }
+        },
+        "required": ["sessionId", "participantId", "participantToken", "actionId", "action"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read_events",
+      "description": "Read conversation events after a validated cursor.",
+      "command": "conversation.read_events",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string" },
+          "participantId": { "type": "string" },
+          "participantToken": { "type": "string" },
+          "cursor": { "type": "integer", "minimum": 0 }
+        },
+        "required": ["sessionId", "participantId", "participantToken", "cursor"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "leave_conversation",
+      "description": "Disconnect this participant even when it does not own the current turn.",
+      "command": "conversation.leave",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string" },
+          "participantId": { "type": "string" },
+          "participantToken": { "type": "string" }
+        },
+        "required": ["sessionId", "participantId", "participantToken"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_conversation",
+      "description": "Read conversation state, participants, current turn, and stop reason.",
+      "command": "conversation.get",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string" },
+          "participantId": { "type": "string" },
+          "participantToken": { "type": "string" }
+        },
+        "required": ["sessionId", "participantId", "participantToken"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "pause_conversation",
+      "description": "Pause a conversation through an authenticated participant connection.",
+      "command": "conversation.pause",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string" },
+          "participantId": { "type": "string" },
+          "participantToken": { "type": "string" }
+        },
+        "required": ["sessionId", "participantId", "participantToken"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "stop_conversation",
+      "description": "Stop a conversation with a deterministic recorded reason.",
+      "command": "conversation.stop",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string" },
+          "participantId": { "type": "string" },
+          "participantToken": { "type": "string" },
+          "reason": { "type": "string" }
+        },
+        "required": ["sessionId", "participantId", "participantToken"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "resume_conversation",
+      "description": "Resume a paused conversation through an authenticated participant connection.",
+      "command": "conversation.resume",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": { "type": "string" },
+          "participantId": { "type": "string" },
+          "participantToken": { "type": "string" }
+        },
+        "required": ["sessionId", "participantId", "participantToken"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}
