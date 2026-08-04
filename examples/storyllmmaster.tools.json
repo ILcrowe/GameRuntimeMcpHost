@@ -3,6 +3,55 @@
   "serverVersion": "0.2.0",
   "tools": [
     {
+      "name": "start_roleplay_conversation",
+      "description": "Start a player and two NPC scene-guided roleplay conversation.",
+      "command": "roleplay.start",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "objective": { "type": "string" },
+          "publicContext": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_roleplay_turn",
+      "description": "Read the next roleplay participant and its scoped scene context.",
+      "command": "roleplay.get_turn",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "submit_roleplay_npc_line",
+      "description": "Submit the current NPC participant line.",
+      "command": "roleplay.submit",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "participantId": { "type": "string" },
+          "content": { "type": "string" }
+        },
+        "required": ["participantId", "content"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_roleplay_conversation",
+      "description": "Read the current roleplay conversation snapshot.",
+      "command": "roleplay.get",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "stop_roleplay_conversation",
+      "description": "Stop the current roleplay conversation with a recorded reason.",
+      "command": "roleplay.stop",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "reason": { "type": "string" } },
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "get_runtime_status",
       "description": "Read the connected game's product, Unity version, play state, and authoritative turn.",
       "command": "runtime.status",
@@ -70,6 +119,60 @@
           "requestId": { "type": "string" }
         },
         "required": ["requestId"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "start_worldbuilding_experiment",
+      "description": "Start a bounded multi-character worldbuilding conversation owned by the active Unity test scene.",
+      "command": "experiment.start",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "topic": { "type": "string" },
+          "source": { "type": "string" },
+          "maxTurns": { "type": "integer", "minimum": 1 },
+          "participants": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "properties": {
+                "participantId": { "type": "string" },
+                "displayName": { "type": "string" },
+                "provider": { "type": "string" },
+                "role": { "type": "string" }
+              },
+              "required": ["participantId", "displayName", "provider", "role"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["topic", "source", "maxTurns", "participants"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "submit_experiment_utterance",
+      "description": "Submit the expected character's next utterance to the Unity-owned conversation.",
+      "command": "experiment.submit",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "participantId": { "type": "string" },
+          "content": { "type": "string" }
+        },
+        "required": ["participantId", "content"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_worldbuilding_experiment",
+      "description": "Read the Unity-owned experiment state, next speaker, participants, and transcript.",
+      "command": "experiment.get",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
         "additionalProperties": false
       }
     }

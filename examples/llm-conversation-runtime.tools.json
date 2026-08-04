@@ -1,10 +1,10 @@
 {
-  "serverName": "rune-agent-bridge-runtime",
+  "serverName": "llm-conversation-runtime",
   "serverVersion": "0.1.0",
   "tools": [
     {
-      "name": "rune_bridge_status",
-      "description": "Read the RuneAgentBridge runtime protocol status.",
+      "name": "conversation_runtime_status",
+      "description": "Read the LLM conversation runtime protocol status.",
       "command": "runtime.status",
       "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
     },
