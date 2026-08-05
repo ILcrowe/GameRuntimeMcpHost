@@ -10,7 +10,29 @@
         "type": "object",
         "properties": {
           "objective": { "type": "string" },
-          "publicContext": { "type": "string" }
+          "publicContext": { "type": "string" },
+          "quality": {
+            "type": "object",
+            "description": "Optional quality rules. On quality_retry, regenerate only the structured turn using result.quality.issueList.",
+            "properties": {
+              "participantRuleList": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "participantId": { "type": "string" },
+                    "forbiddenPhraseList": { "type": "array", "items": { "type": "string" } }
+                  },
+                  "required": ["participantId"],
+                  "additionalProperties": false
+                }
+              },
+              "sceneForbiddenPhraseList": { "type": "array", "items": { "type": "string" } },
+              "metaLeakPhraseList": { "type": "array", "items": { "type": "string" } },
+              "repetitionSimilarityThreshold": { "type": "number", "minimum": 0, "maximum": 1 }
+            },
+            "additionalProperties": false
+          }
         },
         "additionalProperties": false
       }
@@ -36,10 +58,66 @@
       }
     },
     {
+      "name": "submit_roleplay_player_line",
+      "description": "Submit the automated player's current roleplay line. This enables fully LLM-driven scenes without human keyboard input.",
+      "command": "roleplay.submit_player",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "content": { "type": "string" }
+        },
+        "required": ["content"],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "get_roleplay_conversation",
       "description": "Read the current roleplay conversation snapshot.",
       "command": "roleplay.get",
       "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "get_roleplay_turn_outputs",
+      "description": "Read accepted structured turns at Player, MindReading, or Debug visibility. Player is the default and never returns inner monologue or debug metadata.",
+      "command": "roleplay.get_outputs",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "visibility": { "type": "string", "enum": ["Player", "MindReading", "Debug"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "submit_roleplay_npc_turn",
+      "description": "Submit structured NPC speech, inner monologue, action proposal, and presentation hints.",
+      "command": "roleplay.submit_turn",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "participantId": { "type": "string" },
+          "content": {
+            "type": "object",
+            "properties": {
+              "spokenText": { "type": "string" },
+              "innerMonologueText": { "type": "string" },
+              "actionProposal": { "type": "string" },
+              "retryCount": { "type": "integer" },
+              "presentation": {
+                "type": "object",
+                "properties": {
+                  "textStyleKey": { "type": "string" },
+                  "sfxCueKey": { "type": "string" },
+                  "expressionKey": { "type": "string" }
+                }
+              }
+            },
+            "required": ["spokenText"]
+          }
+        },
+        "required": ["participantId", "content"],
+        "additionalProperties": false
+      }
     },
     {
       "name": "stop_roleplay_conversation",
