@@ -1,5 +1,6 @@
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
@@ -8,7 +9,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
-from game_runtime_mcp_host import McpHost, RuntimeClient
+from game_runtime_mcp_host import McpHost, RuntimeClient, discover_session_file
 
 
 MANIFEST = {
@@ -43,6 +44,46 @@ class RuntimeClientTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "loopback"):
                 RuntimeClient(path)
+
+    def test_reloads_session_when_unity_recreates_descriptor(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "session.json"
+            path.write_text(
+                json.dumps(
+                    {"endpoint": "http://127.0.0.1:18761/", "token": "first"}
+                ),
+                encoding="utf-8",
+            )
+            client = RuntimeClient(path)
+            time.sleep(0.01)
+            path.write_text(
+                json.dumps(
+                    {"endpoint": "http://127.0.0.1:18762/", "token": "second"}
+                ),
+                encoding="utf-8",
+            )
+
+            client._reload_session_if_changed()
+
+            self.assertEqual(client.endpoint, "http://127.0.0.1:18762/rpc")
+            self.assertEqual(client.token, "second")
+
+    def test_discovers_latest_matching_lab_session_without_manual_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            older = root / "DefaultCompany" / "Other" / "llm-conversation-lab-runtime-mcp.json"
+            newer = root / "DefaultCompany" / "Lab" / "llm-conversation-lab-runtime-mcp.json"
+            older.parent.mkdir(parents=True)
+            newer.parent.mkdir(parents=True)
+            older.write_text(json.dumps({"product": "OtherLab"}), encoding="utf-8")
+            time.sleep(0.01)
+            newer.write_text(json.dumps({"product": "LLMConversationLab"}), encoding="utf-8")
+
+            discovered = discover_session_file(
+                root, "llm-conversation-lab-runtime-mcp.json", "LLMConversationLab"
+            )
+
+            self.assertEqual(discovered, newer)
 
 
 class McpHostTests(unittest.TestCase):

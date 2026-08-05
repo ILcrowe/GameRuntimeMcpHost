@@ -24,6 +24,14 @@ python src/game_runtime_mcp_host.py `
   --tools-file path/to/tools.json
 ```
 
+LLMConversationLab은 세션 경로를 지정하지 않아도 기본적으로 최신 Lab 세션을 자동 감지합니다.
+Unity Play 재시작 뒤에도 다음 도구 호출 때 새 세션 파일·토큰을 다시 읽습니다.
+
+```powershell
+python src/game_runtime_mcp_host.py `
+  --tools-file examples/llm-conversation-runtime.tools.json
+```
+
 환경변수도 사용할 수 있습니다.
 
 - `GAME_RUNTIME_MCP_SESSION`

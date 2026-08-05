@@ -29,7 +29,15 @@ class ToolRoute:
 
 class RuntimeClient:
     def __init__(self, session_file: Path):
-        session = load_json(session_file)
+        self.session_file = session_file
+        self.session_mtime_ns: int | None = None
+        self.endpoint = ""
+        self.token = ""
+        self.token_header = ""
+        self._reload_session()
+
+    def _reload_session(self) -> None:
+        session = load_json(self.session_file)
         endpoint = str(session["endpoint"])
         parsed = urllib.parse.urlparse(endpoint)
         host = parsed.hostname
@@ -40,8 +48,15 @@ class RuntimeClient:
         self.endpoint = endpoint.rstrip("/") + "/" + rpc_path.lstrip("/")
         self.token = str(session["token"])
         self.token_header = str(session.get("tokenHeader", "X-Game-Runtime-Token"))
+        self.session_mtime_ns = self.session_file.stat().st_mtime_ns
+
+    def _reload_session_if_changed(self) -> None:
+        current_mtime_ns = self.session_file.stat().st_mtime_ns
+        if current_mtime_ns != self.session_mtime_ns:
+            self._reload_session()
 
     def call(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self._reload_session_if_changed()
         body = json.dumps(
             {"protocol": 1, "command": command, "payload": payload},
             separators=(",", ":"),
@@ -166,6 +181,25 @@ def load_json(path: Path) -> dict[str, Any]:
     return value
 
 
+def discover_session_file(
+    local_low_root: Path, session_name: str, product: str | None
+) -> Path:
+    candidates: list[Path] = []
+    for path in local_low_root.rglob(session_name):
+        try:
+            session = load_json(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if product and str(session.get("product", "")) != product:
+            continue
+        candidates.append(path)
+    if not candidates:
+        raise FileNotFoundError(
+            f"No runtime session named '{session_name}' was found under {local_low_root}."
+        )
+    return max(candidates, key=lambda item: item.stat().st_mtime_ns)
+
+
 def rpc_response(
     request_id: Any,
     result: Any = None,
@@ -184,7 +218,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--session-file",
         default=os.environ.get("GAME_RUNTIME_MCP_SESSION"),
-        required="GAME_RUNTIME_MCP_SESSION" not in os.environ,
+    )
+    parser.add_argument(
+        "--session-name",
+        default=os.environ.get(
+            "GAME_RUNTIME_MCP_SESSION_NAME", "llm-conversation-lab-runtime-mcp.json"
+        ),
+    )
+    parser.add_argument(
+        "--session-product",
+        default=os.environ.get("GAME_RUNTIME_MCP_SESSION_PRODUCT", "LLMConversationLab"),
     )
     parser.add_argument(
         "--tools-file",
@@ -196,7 +239,16 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    client = RuntimeClient(Path(args.session_file).resolve())
+    session_file = (
+        Path(args.session_file).resolve()
+        if args.session_file
+        else discover_session_file(
+            Path.home() / "AppData" / "LocalLow",
+            args.session_name,
+            args.session_product or None,
+        )
+    )
+    client = RuntimeClient(session_file)
     host = McpHost(client, load_json(Path(args.tools_file).resolve()))
 
     for line in sys.stdin:
