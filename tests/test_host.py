@@ -3,13 +3,19 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import sys
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "src"))
 
-from game_runtime_mcp_host import McpHost, RuntimeClient, discover_session_file
+from game_runtime_mcp_host import (
+    DiscoveringRuntimeClient,
+    McpHost,
+    RuntimeClient,
+    discover_session_file,
+    load_json,
+)
 
 
 MANIFEST = {
@@ -85,6 +91,75 @@ class RuntimeClientTests(unittest.TestCase):
 
             self.assertEqual(discovered, newer)
 
+    def test_session_descriptor_can_disappear_and_recover_without_restarting_host(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "session.json"
+            path.write_text(
+                json.dumps({"endpoint": "http://127.0.0.1:18761/", "token": "first"}),
+                encoding="utf-8",
+            )
+            client = RuntimeClient(path)
+            host = McpHost(client, MANIFEST)
+
+            path.unlink()
+            unavailable = host.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "tools/call",
+                    "params": {"name": "runtime_status", "arguments": {}},
+                }
+            )
+            self.assertTrue(unavailable["result"]["isError"])
+
+            time.sleep(0.01)
+            path.write_text(
+                json.dumps({"endpoint": "http://127.0.0.1:18762/", "token": "second"}),
+                encoding="utf-8",
+            )
+            client._reload_session_if_changed()
+
+            self.assertEqual(client.endpoint, "http://127.0.0.1:18762/rpc")
+            self.assertEqual(client.token, "second")
+
+    def test_discovering_client_stays_available_when_game_starts_later(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            client = DiscoveringRuntimeClient(
+                root, "storyllm-runtime-mcp.json", "StoryLLMMaster"
+            )
+            host = McpHost(client, MANIFEST)
+            request = {
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {"name": "runtime_status", "arguments": {}},
+            }
+
+            unavailable = host.handle(request)
+            self.assertTrue(unavailable["result"]["isError"])
+
+            session = root / "DefaultCompany" / "StoryLLMMaster" / "storyllm-runtime-mcp.json"
+            session.parent.mkdir(parents=True)
+            session.write_text(
+                json.dumps(
+                    {
+                        "endpoint": "http://127.0.0.1:18761/",
+                        "token": "runtime-token",
+                        "product": "StoryLLMMaster",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(
+                RuntimeClient,
+                "call",
+                return_value={"ok": True, "result": {"turn": 1}},
+            ):
+                available = host.handle(request)
+
+            self.assertFalse(available["result"]["isError"])
+
 
 class McpHostTests(unittest.TestCase):
     def setUp(self):
@@ -120,6 +195,37 @@ class McpHostTests(unittest.TestCase):
             }
         )
         self.assertEqual(result["error"]["code"], -32602)
+
+    def test_runtime_timeout_is_bounded_error_and_host_stays_available(self):
+        self.client.call.side_effect = [TimeoutError("timed out"), {"ok": True, "result": {}}]
+        request = {
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {"name": "runtime_status", "arguments": {}},
+        }
+
+        timed_out = self.host.handle(request)
+        recovered = self.host.handle(request)
+
+        self.assertTrue(timed_out["result"]["isError"])
+        self.assertFalse(recovered["result"]["isError"])
+
+    def test_storyllmmaster_manifest_exposes_complete_turn_control_surface(self):
+        manifest_path = Path(__file__).parents[1] / "examples" / "storyllmmaster.tools.json"
+        routes = McpHost(self.client, load_json(manifest_path)).routes
+
+        self.assertEqual(
+            {route.command for route in routes.values() if route.command.startswith("turn.")},
+            {
+                "turn.list_units",
+                "turn.get_pending",
+                "turn.ensure",
+                "turn.get_context",
+                "turn.submit",
+                "turn.get_result",
+            },
+        )
 
 
 if __name__ == "__main__":

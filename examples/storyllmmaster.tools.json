@@ -140,6 +140,102 @@
       }
     },
     {
+      "name": "list_controllable_units",
+      "description": "List units whose current turn can be controlled through the runtime gateway.",
+      "command": "turn.list_units",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "get_pending_turn_decisions",
+      "description": "List unresolved turn decisions and their legal action sets.",
+      "command": "turn.get_pending",
+      "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+    },
+    {
+      "name": "ensure_turn_decision",
+      "description": "Open or read the authoritative decision for a unit's current turn.",
+      "command": "turn.ensure",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "unitId": { "type": "string" },
+          "timeoutSeconds": { "type": "number", "minimum": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_turn_context",
+      "description": "Read one decision's authoritative state and legal actions before submitting.",
+      "command": "turn.get_context",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "object",
+            "properties": {
+              "battleId": { "type": "string" },
+              "turnId": { "type": "integer" },
+              "unitId": { "type": "string" },
+              "decisionVersion": { "type": "integer" }
+            },
+            "required": ["battleId", "turnId", "unitId", "decisionVersion"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["decision"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "submit_turn_action",
+      "description": "Submit one legal action with decision identity and an idempotency key.",
+      "command": "turn.submit",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "object",
+            "properties": {
+              "battleId": { "type": "string" },
+              "turnId": { "type": "integer" },
+              "unitId": { "type": "string" },
+              "decisionVersion": { "type": "integer" }
+            },
+            "required": ["battleId", "turnId", "unitId", "decisionVersion"],
+            "additionalProperties": false
+          },
+          "actionId": { "type": "string" },
+          "idempotencyKey": { "type": "string" }
+        },
+        "required": ["decision", "actionId", "idempotencyKey"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_turn_result",
+      "description": "Read the accepted, rejected, or fallback result for a turn decision.",
+      "command": "turn.get_result",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "object",
+            "properties": {
+              "battleId": { "type": "string" },
+              "turnId": { "type": "integer" },
+              "unitId": { "type": "string" },
+              "decisionVersion": { "type": "integer" }
+            },
+            "required": ["battleId", "turnId", "unitId", "decisionVersion"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["decision"],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "get_pending_master_requests",
       "description": "List role-play requests awaiting an external MCP-compatible Agent.",
       "command": "master.get_pending",

@@ -25,6 +25,8 @@ python src/game_runtime_mcp_host.py `
 ```
 
 LLMConversationLab은 세션 경로를 지정하지 않아도 기본적으로 최신 Lab 세션을 자동 감지합니다.
+세션 경로를 자동 감지하는 Host는 게임보다 먼저 시작해도 종료되지 않습니다. 게임이 아직
+꺼져 있으면 도구 호출만 연결 오류를 반환하고, 게임 시작 뒤 다음 호출에서 세션을 찾습니다.
 Unity Play 재시작 뒤에도 다음 도구 호출 때 새 세션 파일·토큰을 다시 읽습니다.
 
 ```powershell

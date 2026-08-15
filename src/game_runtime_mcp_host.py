@@ -74,6 +74,26 @@ class RuntimeClient:
             return json.loads(response.read().decode("utf-8"))
 
 
+class DiscoveringRuntimeClient:
+    def __init__(
+        self, local_low_root: Path, session_name: str, product: str | None
+    ):
+        self.local_low_root = local_low_root
+        self.session_name = session_name
+        self.product = product
+        self.session_file: Path | None = None
+        self.client: RuntimeClient | None = None
+
+    def call(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+        session_file = discover_session_file(
+            self.local_low_root, self.session_name, self.product
+        )
+        if self.client is None or session_file != self.session_file:
+            self.session_file = session_file
+            self.client = RuntimeClient(session_file)
+        return self.client.call(command, payload)
+
+
 class McpHost:
     def __init__(self, client: RuntimeClient, manifest: dict[str, Any]):
         self.client = client
@@ -239,16 +259,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    session_file = (
-        Path(args.session_file).resolve()
+    client = (
+        RuntimeClient(Path(args.session_file).resolve())
         if args.session_file
-        else discover_session_file(
+        else DiscoveringRuntimeClient(
             Path.home() / "AppData" / "LocalLow",
             args.session_name,
             args.session_product or None,
         )
     )
-    client = RuntimeClient(session_file)
     host = McpHost(client, load_json(Path(args.tools_file).resolve()))
 
     for line in sys.stdin:
