@@ -2,7 +2,26 @@
 name = "game-runtime-mcp-host"
 version = "0.1.0"
 description = "Dependency-free MCP stdio host for token-authenticated localhost game runtime adapters"
+readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "lLcrowe" }]
+keywords = ["mcp", "game-runtime", "localhost", "stdio", "llm"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/lLcrowe/GameRuntimeMcpHost"
+Repository = "https://github.com/lLcrowe/GameRuntimeMcpHost"
+Issues = "https://github.com/lLcrowe/GameRuntimeMcpHost/issues"
+Changelog = "https://github.com/lLcrowe/GameRuntimeMcpHost/blob/main/CHANGELOG.md"
 
 [project.scripts]
 game-runtime-mcp-host = "game_runtime_mcp_host:main"

@@ -19,6 +19,20 @@ from typing import Any
 MCP_PROTOCOL_VERSION = "2025-03-26"
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(
+            req.full_url,
+            code,
+            "Runtime redirects are not allowed.",
+            headers,
+            fp,
+        )
+
+
+_RUNTIME_OPENER = urllib.request.build_opener(_NoRedirectHandler())
+
+
 @dataclass(frozen=True)
 class ToolRoute:
     name: str
@@ -70,7 +84,7 @@ class RuntimeClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=12) as response:
+        with _RUNTIME_OPENER.open(request, timeout=12) as response:
             return json.loads(response.read().decode("utf-8"))
 
 

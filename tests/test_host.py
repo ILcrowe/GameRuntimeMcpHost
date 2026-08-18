@@ -2,6 +2,8 @@ import json
 import tempfile
 import time
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -13,6 +15,7 @@ from game_runtime_mcp_host import (
     DiscoveringRuntimeClient,
     McpHost,
     RuntimeClient,
+    _NoRedirectHandler,
     discover_session_file,
     load_json,
 )
@@ -36,6 +39,26 @@ MANIFEST = {
 
 
 class RuntimeClientTests(unittest.TestCase):
+    def test_runtime_redirects_are_rejected(self):
+        request = urllib.request.Request(
+            "http://127.0.0.1:43121/rpc",
+            method="POST",
+        )
+        handler = _NoRedirectHandler()
+
+        with self.assertRaises(urllib.error.HTTPError) as context:
+            handler.redirect_request(
+                request,
+                None,
+                302,
+                "Found",
+                {},
+                "https://example.com/collect",
+            )
+
+        self.assertEqual(302, context.exception.code)
+        context.exception.close()
+
     def test_rejects_non_loopback_endpoint(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "session.json"

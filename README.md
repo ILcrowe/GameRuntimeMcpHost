@@ -1,45 +1,107 @@
 # GameRuntimeMcpHost
 
-게임 런타임의 제한된 localhost RPC를 Codex가 호출할 수 있도록 MCP stdio로
-변환하는 독립 Host입니다.
+[한국어 README](README.ko.md)
+
+A dependency-free Model Context Protocol (MCP) stdio host that exposes an explicit set of token-authenticated localhost game runtime commands to compatible AI clients.
 
 ```text
-Codex
-  -> MCP stdio
+MCP client
+  -> stdio
   -> GameRuntimeMcpHost
-  -> 127.0.0.1 RPC + session token
+  -> 127.0.0.1 RPC + per-session token
   -> game-owned runtime adapter
 ```
 
-이 저장소는 게임 규칙을 소유하지 않습니다. 유닛, 턴, legal action, 실제 상태
-변경의 최종 권한은 각 게임 Adapter에 남습니다.
+The host owns transport only. Legal actions, turn validation, authorization, and authoritative state mutation remain in the game adapter.
 
-## 실행
+## Requirements
 
-Python 3.10 이상과 표준 라이브러리만 사용합니다.
+- Python 3.10 or newer
+- An MCP-compatible client
+- A game runtime adapter that writes a session descriptor and accepts the declared RPC contract
+
+The runtime and the host must run on the same machine.
+
+## Install
 
 ```powershell
-python src/game_runtime_mcp_host.py `
-  --session-file path/to/runtime-session.json `
-  --tools-file path/to/tools.json
+git clone https://github.com/lLcrowe/GameRuntimeMcpHost.git
+cd GameRuntimeMcpHost
+python -m pip install -e .
 ```
 
-LLMConversationLab은 세션 경로를 지정하지 않아도 기본적으로 최신 Lab 세션을 자동 감지합니다.
-세션 경로를 자동 감지하는 Host는 게임보다 먼저 시작해도 종료되지 않습니다. 게임이 아직
-꺼져 있으면 도구 호출만 연결 오류를 반환하고, 게임 시작 뒤 다음 호출에서 세션을 찾습니다.
-Unity Play 재시작 뒤에도 다음 도구 호출 때 새 세션 파일·토큰을 다시 읽습니다.
+Verify the installation:
 
 ```powershell
-python src/game_runtime_mcp_host.py `
+game-runtime-mcp-host --help
+python -m unittest discover -s tests -v
+```
+
+## Quick start
+
+Start a runtime adapter first, then provide its session descriptor and a tool manifest:
+
+```powershell
+game-runtime-mcp-host `
+  --session-file C:\path\to\runtime-session.json `
+  --tools-file C:\path\to\tools.json
+```
+
+For a runtime that writes discoverable sessions under `LocalLow`, the host can start before the game and reconnect after Play Mode or process restarts:
+
+```powershell
+game-runtime-mcp-host `
+  --session-name llm-conversation-lab-runtime-mcp.json `
+  --session-product LLMConversationLab `
   --tools-file examples/llm-conversation-runtime.tools.json
 ```
 
-환경변수도 사용할 수 있습니다.
+## MCP client configuration
 
-- `GAME_RUNTIME_MCP_SESSION`
-- `GAME_RUNTIME_MCP_TOOLS`
+The exact configuration file depends on the client. A generic stdio registration looks like this:
 
-## Session contract
+```json
+{
+  "mcpServers": {
+    "game_runtime": {
+      "command": "python",
+      "args": [
+        "-X",
+        "utf8",
+        "C:/path/to/GameRuntimeMcpHost/src/game_runtime_mcp_host.py",
+        "--session-name",
+        "llm-conversation-lab-runtime-mcp.json",
+        "--session-product",
+        "LLMConversationLab",
+        "--tools-file",
+        "C:/path/to/GameRuntimeMcpHost/examples/llm-conversation-runtime.tools.json"
+      ],
+      "env": {
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1"
+      }
+    }
+  }
+}
+```
+
+Codex CLI can register the same process directly:
+
+```powershell
+codex mcp add game_runtime `
+  --env PYTHONIOENCODING=utf-8 `
+  --env PYTHONUTF8=1 `
+  -- python -X utf8 C:\path\to\GameRuntimeMcpHost\src\game_runtime_mcp_host.py `
+  --session-name llm-conversation-lab-runtime-mcp.json `
+  --session-product LLMConversationLab `
+  --tools-file C:\path\to\GameRuntimeMcpHost\examples\llm-conversation-runtime.tools.json
+```
+
+Restart or open a new client session after changing MCP registration.
+
+## Session descriptor
+
+The game-owned adapter writes a JSON file with this contract:
 
 ```json
 {
@@ -53,33 +115,52 @@ python src/game_runtime_mcp_host.py `
 }
 ```
 
-Host는 endpoint가 loopback 주소가 아니면 연결을 거부합니다. 토큰은 로그나 MCP
-응답에 포함하지 않습니다.
+The endpoint must use a numeric loopback address. The token is never included in logs or MCP responses.
 
 ## Tool manifest
 
-도구 이름과 게임 RPC command의 매핑은 게임이 소유한 manifest로 주입합니다.
-[examples/tools.example.json](examples/tools.example.json)을 참고하세요.
+The tool manifest maps MCP tool names to game-owned RPC commands and JSON schemas. Start from one of these examples:
 
-외부 게임 마스터의 provider-neutral 예시는
-[`examples/storyllmmaster.tools.json`](examples/storyllmmaster.tools.json)에 있습니다.
-`clientName`은 관측 정보일 뿐 권한 판정에 사용하지 않으며 Codex, Claude Code,
-그 밖의 MCP 호환 Agent가 같은 계약을 사용할 수 있습니다.
+| Manifest | Purpose |
+|---|---|
+| [`tools.example.json`](examples/tools.example.json) | Minimal generic contract |
+| [`storyllmmaster.tools.json`](examples/storyllmmaster.tools.json) | External game-master control surface |
+| [`llm-conversation-runtime.tools.json`](examples/llm-conversation-runtime.tools.json) | Multi-participant conversation runtime |
 
-LLM·캐릭터 대화 런타임용 manifest는
-[`examples/llm-conversation-runtime.tools.json`](examples/llm-conversation-runtime.tools.json)에 있습니다.
-전역 Runtime 토큰과 별도로 `join_conversation`이 발급한 참여자 토큰을
-`wait_turn`, `submit_action`, `read_events`, `leave_conversation`에 전달합니다.
+`clientName` is observational metadata, not an authorization mechanism. Conversation participant tools use a participant token issued by `join_conversation` in addition to the runtime session token kept by the host.
 
-## 경계
+## Environment variables
 
-- 포함: MCP initialize/ping/tools, localhost RPC, token 전달, bounded timeout
-- 제외: 임의 C# 실행, 원격 bind, 게임 파일 접근, 게임 규칙 검증
-- 게임 Adapter 책임: legal action 생성·검증, idempotency, timeout fallback,
-  authoritative state mutation
+| Variable | Equivalent option |
+|---|---|
+| `GAME_RUNTIME_MCP_SESSION` | `--session-file` |
+| `GAME_RUNTIME_MCP_SESSION_NAME` | `--session-name` |
+| `GAME_RUNTIME_MCP_SESSION_PRODUCT` | `--session-product` |
+| `GAME_RUNTIME_MCP_TOOLS` | `--tools-file` |
 
-## 최초 실증
+Command-line values take precedence over their environment defaults.
 
-StoryLLMMaster Editor Play에서 Codex가 runtime status, controllable unit,
-pending decision을 조회하고 `hold`를 제출해 authoritative turn `1 -> 2`를
-확인한 구현에서 추출했습니다.
+## Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| Tools do not appear | Validate the manifest JSON, restart the MCP client, and confirm the registered command path. |
+| No runtime session is found | Start the game, verify `--session-name` and `--session-product`, or pass `--session-file` explicitly. |
+| Connection refused | Confirm the runtime adapter is listening and that the descriptor points to its current port. |
+| Endpoint is rejected | Use a numeric loopback address such as `127.0.0.1` or `::1`; remote hosts are intentionally blocked. |
+| Unauthorized response | Restart the game or retry the next call so the host reloads the latest session token. |
+| Korean text is corrupted | Launch Python with `-X utf8` and set `PYTHONIOENCODING=utf-8` and `PYTHONUTF8=1`. |
+
+## Scope and limitations
+
+- Included: MCP initialize, ping, tool listing/calls, localhost RPC, token forwarding, bounded timeout, and session rediscovery.
+- Excluded: arbitrary C# execution, remote binding, game-file access, provider SDK calls, and game-rule validation.
+- Adapter responsibility: legal-action validation, idempotency, timeout fallback, and authoritative state mutation.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes. Report security issues according to [SECURITY.md](SECURITY.md).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
