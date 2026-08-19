@@ -250,6 +250,36 @@ class McpHostTests(unittest.TestCase):
             },
         )
 
+    def test_unity_sample_manifest_matches_published_bridge_commands(self):
+        root = Path(__file__).parents[1]
+        manifest_path = root / "examples" / "unity" / "unity-runtime-sample.tools.json"
+        bridge_path = (
+            root
+            / "examples"
+            / "unity"
+            / "Runtime"
+            / "UnityRuntimeMcpSampleBridge.cs"
+        )
+        routes = McpHost(self.client, load_json(manifest_path)).routes
+        source = bridge_path.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            {route.command for route in routes.values()},
+            {"runtime.status", "sample.echo"},
+        )
+        for route in routes.values():
+            self.assertIn(f'case "{route.command}":', source)
+
+    def test_unity_sample_documents_explicit_boot_placement_in_both_languages(self):
+        sample_root = Path(__file__).parents[1] / "examples" / "unity"
+        english = (sample_root / "README.md").read_text(encoding="utf-8")
+        korean = (sample_root / "README.ko.md").read_text(encoding="utf-8")
+
+        self.assertIn("Boot Scene / RuntimeServices", english)
+        self.assertIn("Boot Scene / RuntimeServices", korean)
+        self.assertIn("no hidden `RuntimeInitializeOnLoadMethod`", english)
+        self.assertIn("숨은 `RuntimeInitializeOnLoadMethod`", korean)
+
 
 if __name__ == "__main__":
     unittest.main()

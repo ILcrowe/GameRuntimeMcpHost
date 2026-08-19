@@ -56,6 +56,16 @@ game-runtime-mcp-host `
   --tools-file examples/llm-conversation-runtime.tools.json
 ```
 
+### Unity C# 어댑터 샘플
+
+복사해서 사용할 수 있는 Unity 어댑터와 전용 매니페스트, 플레이 모드(PlayMode) 왕복 테스트를 포함합니다.
+
+- [`examples/unity/README.ko.md`](examples/unity/README.ko.md) — 설정, 씬 배치, 확장, 보안 경계
+- [`UnityRuntimeMcpSampleBridge.cs`](examples/unity/Runtime/UnityRuntimeMcpSampleBridge.cs) — 루프백 리스너, 세션 기술자, 제한된 메인 스레드 처리
+- [`unity-runtime-sample.tools.json`](examples/unity/unity-runtime-sample.tools.json) — `runtime_status`, `echo_message`
+
+샘플은 명시적 `MonoBehaviour`이며 숨은 런타임 부트스트랩을 설치하지 않습니다.
+
 ## MCP 클라이언트 설정
 
 설정 파일 위치는 클라이언트마다 다르지만 stdio 등록 내용은 다음과 같습니다.
@@ -124,6 +134,7 @@ endpoint는 숫자형 루프백 주소여야 합니다. 토큰은 로그나 MCP 
 | 매니페스트 | 용도 |
 |---|---|
 | [`tools.example.json`](examples/tools.example.json) | 최소 범용 계약 |
+| [`unity-runtime-sample.tools.json`](examples/unity/unity-runtime-sample.tools.json) | 복사형 Unity C# 어댑터 샘플 |
 | [`storyllmmaster.tools.json`](examples/storyllmmaster.tools.json) | 외부 게임 마스터 제어면 |
 | [`llm-conversation-runtime.tools.json`](examples/llm-conversation-runtime.tools.json) | 다중 참여자 대화 런타임 |
 

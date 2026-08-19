@@ -1,0 +1,16 @@
+{
+  "name": "lLCroweTool.GameRuntimeMcpHost.UnitySample",
+  "rootNamespace": "lLCroweTool.GameRuntimeMcpHost",
+  "references": [],
+  "includePlatforms": [],
+  "excludePlatforms": [
+    "WebGL"
+  ],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

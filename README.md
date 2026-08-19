@@ -56,6 +56,16 @@ game-runtime-mcp-host `
   --tools-file examples/llm-conversation-runtime.tools.json
 ```
 
+### Unity C# adapter sample
+
+The repository now includes a copy-ready Unity adapter with a companion manifest and PlayMode round-trip test:
+
+- [`examples/unity/README.md`](examples/unity/README.md) — setup, scene placement, extension, and security boundaries
+- [`UnityRuntimeMcpSampleBridge.cs`](examples/unity/Runtime/UnityRuntimeMcpSampleBridge.cs) — loopback listener, session descriptor, bounded main-thread dispatch
+- [`unity-runtime-sample.tools.json`](examples/unity/unity-runtime-sample.tools.json) — `runtime_status` and `echo_message`
+
+The sample is an explicit `MonoBehaviour`; it does not install a hidden runtime bootstrap.
+
 ## MCP client configuration
 
 The exact configuration file depends on the client. A generic stdio registration looks like this:
@@ -124,6 +134,7 @@ The tool manifest maps MCP tool names to game-owned RPC commands and JSON schema
 | Manifest | Purpose |
 |---|---|
 | [`tools.example.json`](examples/tools.example.json) | Minimal generic contract |
+| [`unity-runtime-sample.tools.json`](examples/unity/unity-runtime-sample.tools.json) | Copy-ready Unity C# adapter sample |
 | [`storyllmmaster.tools.json`](examples/storyllmmaster.tools.json) | External game-master control surface |
 | [`llm-conversation-runtime.tools.json`](examples/llm-conversation-runtime.tools.json) | Multi-participant conversation runtime |
 
