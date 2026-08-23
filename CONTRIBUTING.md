@@ -5,7 +5,7 @@ GameRuntimeMcpHost accepts focused fixes and transport-level improvements. Game 
 ## Development setup
 
 ```powershell
-git clone https://github.com/lLcrowe/GameRuntimeMcpHost.git
+git clone https://github.com/ILcrowe/GameRuntimeMcpHost.git
 cd GameRuntimeMcpHost
 python -m pip install -e .
 python -m unittest discover -s tests -v

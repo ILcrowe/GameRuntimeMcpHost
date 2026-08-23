@@ -25,7 +25,7 @@ The runtime and the host must run on the same machine.
 ## Install
 
 ```powershell
-git clone https://github.com/lLcrowe/GameRuntimeMcpHost.git
+git clone https://github.com/ILcrowe/GameRuntimeMcpHost.git
 cd GameRuntimeMcpHost
 python -m pip install -e .
 ```

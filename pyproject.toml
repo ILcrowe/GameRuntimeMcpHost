@@ -18,10 +18,10 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/lLcrowe/GameRuntimeMcpHost"
-Repository = "https://github.com/lLcrowe/GameRuntimeMcpHost"
-Issues = "https://github.com/lLcrowe/GameRuntimeMcpHost/issues"
-Changelog = "https://github.com/lLcrowe/GameRuntimeMcpHost/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/ILcrowe/GameRuntimeMcpHost"
+Repository = "https://github.com/ILcrowe/GameRuntimeMcpHost"
+Issues = "https://github.com/ILcrowe/GameRuntimeMcpHost/issues"
+Changelog = "https://github.com/ILcrowe/GameRuntimeMcpHost/blob/main/CHANGELOG.md"
 
 [project.scripts]
 game-runtime-mcp-host = "game_runtime_mcp_host:main"

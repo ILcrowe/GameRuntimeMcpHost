@@ -25,7 +25,7 @@ MCP 클라이언트
 ## 설치
 
 ```powershell
-git clone https://github.com/lLcrowe/GameRuntimeMcpHost.git
+git clone https://github.com/ILcrowe/GameRuntimeMcpHost.git
 cd GameRuntimeMcpHost
 python -m pip install -e .
 ```
