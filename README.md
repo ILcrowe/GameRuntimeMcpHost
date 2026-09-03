@@ -66,6 +66,16 @@ The repository now includes a copy-ready Unity adapter with a companion manifest
 
 The sample is an explicit `MonoBehaviour`; it does not install a hidden runtime bootstrap.
 
+## External Agent session adapters
+
+Version 0.3 also provides reusable, CLI-backed Provider session adapters:
+
+- `CodexPersistentSession` — one Codex app-server process, one persistent primary thread, isolated utility threads.
+- `GrokHeadlessSession` — bounded `grok -p` calls with structured output and native `--resume` session persistence.
+- `JsonRpcStdioClient`, `ProviderSessionDescriptor`, and `AppendOnlyConversationStream` — provider-neutral process/session primitives.
+
+The consuming game still owns prompts, JSON Schemas, conversation rules, and authoritative state mutation. These modules own Provider process transport and native session continuity only. See [`EXTERNAL_AGENT_SESSIONS.md`](EXTERNAL_AGENT_SESSIONS.md).
+
 ## MCP client configuration
 
 The exact configuration file depends on the client. A generic stdio registration looks like this:
@@ -148,6 +158,7 @@ The tool manifest maps MCP tool names to game-owned RPC commands and JSON schema
 | `GAME_RUNTIME_MCP_SESSION_NAME` | `--session-name` |
 | `GAME_RUNTIME_MCP_SESSION_PRODUCT` | `--session-product` |
 | `GAME_RUNTIME_MCP_TOOLS` | `--tools-file` |
+| `GAME_RUNTIME_GROK_SOURCE_HOME` | Source Grok home used only to copy cached authentication into an isolated runtime home |
 
 Command-line values take precedence over their environment defaults.
 
@@ -161,12 +172,13 @@ Command-line values take precedence over their environment defaults.
 | Endpoint is rejected | Use a numeric loopback address such as `127.0.0.1` or `::1`; remote hosts are intentionally blocked. |
 | Unauthorized response | Restart the game or retry the next call so the host reloads the latest session token. |
 | Korean text is corrupted | Launch Python with `-X utf8` and set `PYTHONIOENCODING=utf-8` and `PYTHONUTF8=1`. |
+| Grok inherits personal MCP configuration | Use `GrokHeadlessSession`; it creates an isolated per-scope `GROK_HOME` and copies only cached authentication. |
 
 ## Scope and limitations
 
-- Included: MCP initialize, ping, tool listing/calls, localhost RPC, token forwarding, bounded timeout, and session rediscovery.
-- Excluded: arbitrary C# execution, remote binding, game-file access, provider SDK calls, and game-rule validation.
-- Adapter responsibility: legal-action validation, idempotency, timeout fallback, and authoritative state mutation.
+- Included: MCP initialize, ping, tool listing/calls, localhost RPC, token forwarding, bounded timeout, session rediscovery, and CLI-backed external-agent session transport.
+- Excluded: arbitrary C# execution, remote binding, game-file access, provider SDK calls, game-specific prompt construction, and game-rule validation.
+- Adapter responsibility: legal-action validation, idempotency, timeout fallback, authoritative state mutation, and save/run scope selection.
 
 ## Contributing and security
 

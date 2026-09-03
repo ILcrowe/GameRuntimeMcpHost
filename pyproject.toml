@@ -1,12 +1,12 @@
 [project]
 name = "game-runtime-mcp-host"
-version = "0.2.0"
-description = "Dependency-free MCP stdio host for token-authenticated localhost game runtime adapters"
+version = "0.3.0"
+description = "Dependency-free MCP runtime host with CLI-backed external-agent session adapters"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "lLcrowe" }]
-keywords = ["mcp", "game-runtime", "localhost", "stdio", "llm"]
+keywords = ["mcp", "game-runtime", "localhost", "stdio", "llm", "codex", "grok"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "License :: OSI Approved :: MIT License",
@@ -31,5 +31,10 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["game_runtime_mcp_host"]
+py-modules = [
+  "game_runtime_mcp_host",
+  "game_runtime_agent_session",
+  "game_runtime_codex_session",
+  "game_runtime_grok_session",
+]
 package-dir = {"" = "src"}
