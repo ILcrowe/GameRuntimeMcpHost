@@ -66,6 +66,16 @@ game-runtime-mcp-host `
 
 샘플은 명시적 `MonoBehaviour`이며 숨은 런타임 부트스트랩을 설치하지 않습니다.
 
+## 외부 Agent 세션 어댑터
+
+0.3부터 로그인된 CLI를 사용하는 재사용 가능한 Provider 세션 어댑터도 제공합니다.
+
+- `CodexPersistentSession` — Codex app-server 프로세스 하나, primary thread 하나, 격리된 utility thread
+- `GrokHeadlessSession` — `grok -p`의 구조화 출력과 native `--resume`을 사용하는 제한 시간형 호출
+- `JsonRpcStdioClient`, `ProviderSessionDescriptor`, `AppendOnlyConversationStream` — Provider 중립 프로세스·세션 기반 코드
+
+게임은 여전히 프롬프트, JSON Schema, 대화 규칙, 권위 상태 변경을 소유합니다. 이 모듈들은 Provider 프로세스 전송과 native session 연속성만 담당합니다. 자세한 구조는 [`EXTERNAL_AGENT_SESSIONS.md`](EXTERNAL_AGENT_SESSIONS.md)를 확인합니다.
+
 ## MCP 클라이언트 설정
 
 설정 파일 위치는 클라이언트마다 다르지만 stdio 등록 내용은 다음과 같습니다.
@@ -148,6 +158,7 @@ endpoint는 숫자형 루프백 주소여야 합니다. 토큰은 로그나 MCP 
 | `GAME_RUNTIME_MCP_SESSION_NAME` | `--session-name` |
 | `GAME_RUNTIME_MCP_SESSION_PRODUCT` | `--session-product` |
 | `GAME_RUNTIME_MCP_TOOLS` | `--tools-file` |
+| `GAME_RUNTIME_GROK_SOURCE_HOME` | 격리 런타임 홈으로 인증만 복사할 원본 Grok 홈 |
 
 명령줄 값이 환경변수 기본값보다 우선합니다.
 
@@ -161,12 +172,13 @@ endpoint는 숫자형 루프백 주소여야 합니다. 토큰은 로그나 MCP 
 | endpoint 거부 | `127.0.0.1` 또는 `::1` 같은 숫자형 루프백 주소를 사용합니다. 원격 주소는 의도적으로 차단됩니다. |
 | 인증 실패 | 게임을 재시작하거나 다음 호출을 다시 시도해 최신 세션 토큰을 읽게 합니다. |
 | 한글 깨짐 | Python에 `-X utf8`을 전달하고 `PYTHONIOENCODING=utf-8`, `PYTHONUTF8=1`을 설정합니다. |
+| Grok가 개인 MCP 설정을 읽음 | `GrokHeadlessSession`은 scope별 `GROK_HOME`을 만들고 사용자 홈에서는 인증만 복사합니다. |
 
 ## 범위와 제한사항
 
-- 포함: MCP 초기화, ping, 도구 조회·호출, localhost RPC, 토큰 전달, 제한된 타임아웃, 세션 재탐색
-- 제외: 임의 C# 실행, 원격 bind, 게임 파일 접근, LLM 공급자 SDK 호출, 게임 규칙 검증
-- 게임 어댑터 책임: 합법 행동 검증, 멱등성, 타임아웃 대체 경로, 권위 상태 변경
+- 포함: MCP 초기화, ping, 도구 조회·호출, localhost RPC, 토큰 전달, 제한된 타임아웃, 세션 재탐색, CLI 기반 외부 Agent 세션 전송
+- 제외: 임의 C# 실행, 원격 bind, 게임 파일 접근, LLM 공급자 SDK 호출, 게임별 프롬프트 작성, 게임 규칙 검증
+- 게임 어댑터 책임: 합법 행동 검증, 멱등성, 타임아웃 대체 경로, 권위 상태 변경, Save/Run scope 선택
 
 ## 기여와 보안
 
