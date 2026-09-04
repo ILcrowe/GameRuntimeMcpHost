@@ -100,25 +100,141 @@ class RuntimeClientTests(unittest.TestCase):
     def test_discovers_latest_matching_lab_session_without_manual_path(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            older = root / "DefaultCompany" / "Other" / "llm-conversation-lab-runtime-mcp.json"
-            newer = root / "DefaultCompany" / "Lab" / "llm-conversation-lab-runtime-mcp.json"
+            older = (
+                root
+                / "DefaultCompany"
+                / "Other"
+                / "llm-conversation-lab-runtime-mcp.json"
+            )
+            newer = (
+                root
+                / "DefaultCompany"
+                / "Lab"
+                / "llm-conversation-lab-runtime-mcp.json"
+            )
             older.parent.mkdir(parents=True)
             newer.parent.mkdir(parents=True)
-            older.write_text(json.dumps({"product": "OtherLab"}), encoding="utf-8")
+            older.write_text(
+                json.dumps({"product": "OtherLab"}),
+                encoding="utf-8",
+            )
             time.sleep(0.01)
-            newer.write_text(json.dumps({"product": "LLMConversationLab"}), encoding="utf-8")
+            newer.write_text(
+                json.dumps({"product": "LLMConversationLab"}),
+                encoding="utf-8",
+            )
 
             discovered = discover_session_file(
-                root, "llm-conversation-lab-runtime-mcp.json", "LLMConversationLab"
+                root,
+                "llm-conversation-lab-runtime-mcp.json",
+                "LLMConversationLab",
             )
 
             self.assertEqual(discovered, newer)
+
+    def test_discovers_requested_runtime_instance_from_descriptor(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            client_one = (
+                root
+                / "Company"
+                / "Game"
+                / "game-runtime-mcp-session-client-01.json"
+            )
+            client_two = (
+                root
+                / "Company"
+                / "Game"
+                / "game-runtime-mcp-session-client-02.json"
+            )
+            client_one.parent.mkdir(parents=True)
+            client_one.write_text(
+                json.dumps(
+                    {
+                        "product": "ExampleGame",
+                        "instanceId": "client-01",
+                        "role": "client",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            time.sleep(0.01)
+            client_two.write_text(
+                json.dumps(
+                    {
+                        "product": "ExampleGame",
+                        "instanceId": "client-02",
+                        "role": "client",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            discovered = discover_session_file(
+                root,
+                "game-runtime-mcp-session.json",
+                "ExampleGame",
+                instance_id="client-01",
+                role="client",
+            )
+
+            self.assertEqual(discovered, client_one)
+
+    def test_instance_filter_can_use_unique_session_file_suffix(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path = (
+                root
+                / "Company"
+                / "Game"
+                / "game-runtime-mcp-session-server.json"
+            )
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                json.dumps({"product": "ExampleGame"}),
+                encoding="utf-8",
+            )
+
+            discovered = discover_session_file(
+                root,
+                "game-runtime-mcp-session.json",
+                "ExampleGame",
+                instance_id="server",
+            )
+
+            self.assertEqual(discovered, path)
+
+    def test_role_filter_does_not_select_a_different_runtime_role(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            path = root / "Company" / "Game" / "game-runtime-mcp-session.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                json.dumps(
+                    {
+                        "product": "ExampleGame",
+                        "instanceId": "server-01",
+                        "role": "server",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(FileNotFoundError, "role='client'"):
+                discover_session_file(
+                    root,
+                    "game-runtime-mcp-session.json",
+                    "ExampleGame",
+                    role="client",
+                )
 
     def test_session_descriptor_can_disappear_and_recover_without_restarting_host(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "session.json"
             path.write_text(
-                json.dumps({"endpoint": "http://127.0.0.1:18761/", "token": "first"}),
+                json.dumps(
+                    {"endpoint": "http://127.0.0.1:18761/", "token": "first"}
+                ),
                 encoding="utf-8",
             )
             client = RuntimeClient(path)
@@ -137,7 +253,9 @@ class RuntimeClientTests(unittest.TestCase):
 
             time.sleep(0.01)
             path.write_text(
-                json.dumps({"endpoint": "http://127.0.0.1:18762/", "token": "second"}),
+                json.dumps(
+                    {"endpoint": "http://127.0.0.1:18762/", "token": "second"}
+                ),
                 encoding="utf-8",
             )
             client._reload_session_if_changed()
@@ -149,7 +267,9 @@ class RuntimeClientTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             client = DiscoveringRuntimeClient(
-                root, "storyllm-runtime-mcp.json", "StoryLLMMaster"
+                root,
+                "storyllm-runtime-mcp.json",
+                "StoryLLMMaster",
             )
             host = McpHost(client, MANIFEST)
             request = {
@@ -162,7 +282,12 @@ class RuntimeClientTests(unittest.TestCase):
             unavailable = host.handle(request)
             self.assertTrue(unavailable["result"]["isError"])
 
-            session = root / "DefaultCompany" / "StoryLLMMaster" / "storyllm-runtime-mcp.json"
+            session = (
+                root
+                / "DefaultCompany"
+                / "StoryLLMMaster"
+                / "storyllm-runtime-mcp.json"
+            )
             session.parent.mkdir(parents=True)
             session.write_text(
                 json.dumps(
@@ -191,7 +316,12 @@ class McpHostTests(unittest.TestCase):
 
     def test_lists_manifest_tools(self):
         result = self.host.handle(
-            {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": {},
+            }
         )
         self.assertEqual(result["result"]["tools"][0]["name"], "runtime_status")
 
@@ -220,7 +350,10 @@ class McpHostTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], -32602)
 
     def test_runtime_timeout_is_bounded_error_and_host_stays_available(self):
-        self.client.call.side_effect = [TimeoutError("timed out"), {"ok": True, "result": {}}]
+        self.client.call.side_effect = [
+            TimeoutError("timed out"),
+            {"ok": True, "result": {}},
+        ]
         request = {
             "jsonrpc": "2.0",
             "id": 5,
@@ -235,11 +368,19 @@ class McpHostTests(unittest.TestCase):
         self.assertFalse(recovered["result"]["isError"])
 
     def test_storyllmmaster_manifest_exposes_complete_turn_control_surface(self):
-        manifest_path = Path(__file__).parents[1] / "examples" / "storyllmmaster.tools.json"
+        manifest_path = (
+            Path(__file__).parents[1]
+            / "examples"
+            / "storyllmmaster.tools.json"
+        )
         routes = McpHost(self.client, load_json(manifest_path)).routes
 
         self.assertEqual(
-            {route.command for route in routes.values() if route.command.startswith("turn.")},
+            {
+                route.command
+                for route in routes.values()
+                if route.command.startswith("turn.")
+            },
             {
                 "turn.list_units",
                 "turn.get_pending",
@@ -249,36 +390,6 @@ class McpHostTests(unittest.TestCase):
                 "turn.get_result",
             },
         )
-
-    def test_unity_sample_manifest_matches_published_bridge_commands(self):
-        root = Path(__file__).parents[1]
-        manifest_path = root / "examples" / "unity" / "unity-runtime-sample.tools.json"
-        bridge_path = (
-            root
-            / "examples"
-            / "unity"
-            / "Runtime"
-            / "UnityRuntimeMcpSampleBridge.cs"
-        )
-        routes = McpHost(self.client, load_json(manifest_path)).routes
-        source = bridge_path.read_text(encoding="utf-8")
-
-        self.assertEqual(
-            {route.command for route in routes.values()},
-            {"runtime.status", "sample.echo"},
-        )
-        for route in routes.values():
-            self.assertIn(f'case "{route.command}":', source)
-
-    def test_unity_sample_documents_explicit_boot_placement_in_both_languages(self):
-        sample_root = Path(__file__).parents[1] / "examples" / "unity"
-        english = (sample_root / "README.md").read_text(encoding="utf-8")
-        korean = (sample_root / "README.ko.md").read_text(encoding="utf-8")
-
-        self.assertIn("Boot Scene / RuntimeServices", english)
-        self.assertIn("Boot Scene / RuntimeServices", korean)
-        self.assertIn("no hidden `RuntimeInitializeOnLoadMethod`", english)
-        self.assertIn("숨은 `RuntimeInitializeOnLoadMethod`", korean)
 
 
 if __name__ == "__main__":

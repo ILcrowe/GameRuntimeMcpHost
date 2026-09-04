@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## 미출시
 
+- Tool Manifest `inputSchema`의 의존성 없는 부분집합을 Host에서 사전 검증
+- 잘못된 Tool 인자의 Runtime 전달 차단과 JSON-RPC `-32602` 응답
+- `--session-instance`·`--session-role` 기반 다중 Runtime 선택
+- 기본 Session 이름과 접미사형 Session 파일 동시 검색
+- 구형 Unity 샘플 경로를 참조하던 Host 테스트 제거
+- Windows Python 구문 검사·단위 테스트 GitHub Actions
 - 공통 `GameRuntimeMcpBridge` 기반 Unity 통합 샘플
 - Owner 단위 원자적 `RegisterAll`·`UnregisterAll` 명령 등록
 - 게임 상태·주변 조회·이동·상호작용·채팅 샘플

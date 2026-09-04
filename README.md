@@ -12,7 +12,7 @@ MCP client
   -> game-owned runtime adapter
 ```
 
-The host owns transport. The game adapter owns legal-action validation, authorization, and authoritative state mutation.
+The host owns transport and published tool argument validation. The game adapter owns authorization, legal-action validation, game rules, and authoritative mutation.
 
 ## Requirements
 
@@ -42,6 +42,48 @@ game-runtime-mcp-host `
 ```
 
 The host may start before the game. The next tool call rediscovers a recreated runtime session.
+
+## Tool input validation
+
+`tools/call` arguments are validated against the manifest `inputSchema` before runtime RPC.
+
+```text
+invalid type
+missing required argument
+unknown argument
+range or length violation
+anyOf mismatch
+-> JSON-RPC -32602
+-> no runtime RPC
+```
+
+Unsupported schema keywords fail host construction instead of being silently ignored.
+
+Details: [`TOOL_INPUT_VALIDATION.md`](TOOL_INPUT_VALIDATION.md)
+
+## Multiple runtime selection
+
+Select one client, server, or player when several sessions from the same product exist:
+
+```powershell
+game-runtime-mcp-host `
+  --session-name game-runtime-mcp-session.json `
+  --session-product ExampleGame `
+  --session-instance client-01 `
+  --session-role client `
+  --tools-file C:\path\to\game-runtime.tools.json
+```
+
+An exact session name also searches its suffixed form:
+
+```text
+game-runtime-mcp-session.json
+game-runtime-mcp-session-*.json
+```
+
+Without selectors, backward-compatible newest-matching-session behavior remains.
+
+Details: [`MULTI_RUNTIME_SELECTION.md`](MULTI_RUNTIME_SELECTION.md)
 
 ## Unified Unity sample
 
@@ -101,6 +143,7 @@ Fixed low-reasoning order:
 
 ```text
 target gate
+-> select instance/role when sessions are ambiguous
 -> runtime status
 -> build identity when relevant
 -> exact game-owned tool
@@ -161,11 +204,13 @@ Open a new client session after changing MCP registration or project-local skill
   "tokenHeader": "X-Game-Runtime-Token",
   "rpcPath": "/rpc",
   "product": "UnityGameRuntime",
-  "processId": 1234
+  "processId": 1234,
+  "instanceId": "client-01",
+  "role": "client"
 }
 ```
 
-Numeric loopback endpoints only. Tokens never belong in logs or MCP responses.
+`instanceId` and `role` are optional selector metadata. Numeric loopback endpoints only. Tokens never belong in logs or MCP responses.
 
 ## Tool manifests
 
@@ -184,10 +229,30 @@ Numeric loopback endpoints only. Tokens never belong in logs or MCP responses.
 | `GAME_RUNTIME_MCP_SESSION` | `--session-file` |
 | `GAME_RUNTIME_MCP_SESSION_NAME` | `--session-name` |
 | `GAME_RUNTIME_MCP_SESSION_PRODUCT` | `--session-product` |
+| `GAME_RUNTIME_MCP_SESSION_INSTANCE` | `--session-instance` |
+| `GAME_RUNTIME_MCP_SESSION_ROLE` | `--session-role` |
 | `GAME_RUNTIME_MCP_TOOLS` | `--tools-file` |
 | `GAME_RUNTIME_GROK_SOURCE_HOME` | Authentication source for isolated Grok homes |
 
 Command-line values take precedence.
+
+## Automated tests
+
+GitHub Actions runs:
+
+```text
+Windows
+Python 3.10
+compileall
+unittest discover
+```
+
+Local run:
+
+```powershell
+python -m compileall -q src tests
+python -m unittest discover -s tests -v
+```
 
 ## Scope
 
@@ -195,10 +260,12 @@ Included:
 
 ```text
 MCP initialize / ping / tools
+tool input schema validation
 localhost RPC
 token forwarding
 bounded timeout
 session rediscovery
+multiple runtime selection
 Unity sample
 runtime diagnostics
 provider session transport
