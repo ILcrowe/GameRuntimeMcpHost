@@ -99,7 +99,10 @@ class GrokHeadlessSessionTests(unittest.TestCase):
             source_home.mkdir()
             (source_home / "auth.json").write_text("{}", encoding="utf-8")
             runner = _QueueRunner(
-                [self._success("session-a", "first"), self._success("session-a", "second")]
+                [
+                    self._success("session-a", "first"),
+                    self._success("session-a", "second"),
+                ]
             )
             session = GrokHeadlessSession(
                 root / "state",
@@ -109,24 +112,39 @@ class GrokHeadlessSessionTests(unittest.TestCase):
                 logger=lambda _: None,
             )
 
-            self.assertEqual(session.generate("one", output_schema=self.schema)["narration"], "first")
-            self.assertEqual(session.generate("two", output_schema=self.schema)["narration"], "second")
+            try:
+                self.assertEqual(
+                    session.generate("one", output_schema=self.schema)["narration"],
+                    "first",
+                )
+                self.assertEqual(
+                    session.generate("two", output_schema=self.schema)["narration"],
+                    "second",
+                )
 
-            first_command = runner.calls[0][0]
-            second_command = runner.calls[1][0]
-            self.assertNotIn("--resume", first_command)
-            self.assertIn("--resume", second_command)
-            resume_index = second_command.index("--resume")
-            self.assertEqual(second_command[resume_index + 1], "session-a")
-            self.assertIn("--json-schema", first_command)
-            self.assertEqual(
-                ProviderSessionDescriptor(root / "state" / "provider_sessions.json").read_id("grok"),
-                "session-a",
-            )
-            child_env = runner.calls[0][1]["env"]
-            self.assertEqual(child_env["GROK_HOME"], str(root / "state" / "grok-runtime-home"))
-            self.assertTrue((root / "state" / "grok-runtime-home" / "auth.json").exists())
-            session.close()
+                first_command = runner.calls[0][0]
+                second_command = runner.calls[1][0]
+                self.assertNotIn("--resume", first_command)
+                self.assertIn("--resume", second_command)
+                resume_index = second_command.index("--resume")
+                self.assertEqual(second_command[resume_index + 1], "session-a")
+                self.assertIn("--json-schema", first_command)
+                self.assertEqual(
+                    ProviderSessionDescriptor(
+                        root / "state" / "provider_sessions.json"
+                    ).read_id("grok"),
+                    "session-a",
+                )
+                child_env = runner.calls[0][1]["env"]
+                self.assertEqual(
+                    Path(child_env["GROK_HOME"]).resolve(),
+                    (root / "state" / "grok-runtime-home").resolve(),
+                )
+                self.assertTrue(
+                    (root / "state" / "grok-runtime-home" / "auth.json").exists()
+                )
+            finally:
+                session.close()
 
     def test_missing_resumed_session_retries_as_new(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -140,7 +158,10 @@ class GrokHeadlessSessionTests(unittest.TestCase):
                     _Completed(
                         returncode=1,
                         stdout=json.dumps(
-                            {"type": "error", "message": "Couldn't start session: Path not found."}
+                            {
+                                "type": "error",
+                                "message": "Couldn't start session: Path not found.",
+                            }
                         ),
                     ),
                     self._success("replacement-session", "recovered"),
@@ -153,18 +174,24 @@ class GrokHeadlessSessionTests(unittest.TestCase):
                 process_runner=runner,
                 logger=lambda _: None,
             )
-            result = session.generate("recover", output_schema=self.schema)
-            self.assertEqual(result["narration"], "recovered")
-            self.assertIn("--resume", runner.calls[0][0])
-            self.assertNotIn("--resume", runner.calls[1][0])
-            self.assertEqual(session.session_id, "replacement-session")
-            session.close()
+
+            try:
+                result = session.generate("recover", output_schema=self.schema)
+                self.assertEqual(result["narration"], "recovered")
+                self.assertIn("--resume", runner.calls[0][0])
+                self.assertNotIn("--resume", runner.calls[1][0])
+                self.assertEqual(session.session_id, "replacement-session")
+            finally:
+                session.close()
 
     def test_utility_channel_does_not_replace_primary_descriptor(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             runner = _QueueRunner(
-                [self._success("primary", "main"), self._success("utility", "diag")]
+                [
+                    self._success("primary", "main"),
+                    self._success("utility", "diag"),
+                ]
             )
             session = GrokHeadlessSession(
                 root / "state",
@@ -173,14 +200,19 @@ class GrokHeadlessSessionTests(unittest.TestCase):
                 process_runner=runner,
                 logger=lambda _: None,
             )
-            session.generate("main", output_schema=self.schema)
-            session.generate_utility("settings", "diag", output_schema=self.schema)
-            self.assertEqual(session.session_id, "primary")
-            self.assertEqual(
-                ProviderSessionDescriptor(root / "state" / "provider_sessions.json").read_id("grok"),
-                "primary",
-            )
-            session.close()
+
+            try:
+                session.generate("main", output_schema=self.schema)
+                session.generate_utility("settings", "diag", output_schema=self.schema)
+                self.assertEqual(session.session_id, "primary")
+                self.assertEqual(
+                    ProviderSessionDescriptor(
+                        root / "state" / "provider_sessions.json"
+                    ).read_id("grok"),
+                    "primary",
+                )
+            finally:
+                session.close()
 
 
 if __name__ == "__main__":
