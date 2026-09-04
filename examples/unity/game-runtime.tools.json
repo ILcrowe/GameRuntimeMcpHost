@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "serverName": "unity-game-runtime",
+  "serverVersion": "0.4.0",
+  "tools": [
+    {
+      "name": "runtime_status",
+      "description": "연결된 Unity Player와 현재 프로세스·씬 상태를 확인합니다.",
+      "command": "runtime.status",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "runtime_build_info",
+      "description": "현재 Player의 제품·버전·Build ID·플랫폼·Scripting Backend를 확인합니다.",
+      "command": "runtime.build_info",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "runtime_logs_read",
+      "description": "Sequence Cursor를 사용해 새 Unity Runtime Log를 제한된 크기로 읽습니다.",
+      "command": "runtime.logs.read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sinceSequence": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "level": {
+            "type": "string"
+          },
+          "contains": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50
+          },
+          "includeStackTrace": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "runtime_metrics_snapshot",
+      "description": "현재 프레임과 메모리 상태의 단일 성능 스냅샷을 읽습니다.",
+      "command": "runtime.metrics.snapshot",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "runtime_capture_screenshot",
+      "description": "Application.persistentDataPath 아래 진단 폴더에 화면 캡처를 예약합니다.",
+      "command": "runtime.capture_screenshot",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_game_state",
+      "description": "제어 대상의 위치, 체력, 목표, 이동 상태와 최근 행동 상태를 조회합니다.",
+      "command": "game.get_state",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_surroundings",
+      "description": "제어 대상 주변의 객체와 등록된 상호작용 대상을 거리순으로 조회합니다.",
+      "command": "game.get_surroundings",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "radius": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 50,
+            "default": 15
+          },
+          "maxResults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 10
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "player_move_to",
+      "description": "제어 대상을 현재 Y 높이를 유지한 채 지정한 월드 X/Z 좌표로 이동시킵니다.",
+      "command": "player.move_to",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "targetX": {
+            "type": "number"
+          },
+          "targetZ": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "targetX",
+          "targetZ"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "player_interact",
+      "description": "get_surroundings가 반환한 targetId를 우선 사용해 등록된 대상과 상호작용합니다.",
+      "command": "player.interact",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "targetId": {
+            "type": "string"
+          },
+          "targetName": {
+            "type": "string"
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "targetId"
+            ]
+          },
+          {
+            "required": [
+              "targetName"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "send_in_game_chat",
+      "description": "최대 500자의 메시지를 게임 소유 UnityEvent로 전달합니다.",
+      "command": "chat.send",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

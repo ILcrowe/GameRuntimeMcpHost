@@ -4,24 +4,44 @@ using System.IO;
 using UnityEngine;
 using UnityEngine.Profiling;
 
-namespace lLCroweTool.GameRuntimeMcpHost
+namespace GameRuntimeMcp
 {
     /// <summary>
-    /// Optional, game-independent diagnostics for a running Unity Player.
-    ///
-    /// This component does not own transport or gameplay authority. A game-owned
-    /// runtime adapter may map the public methods to its MCP/RPC command surface.
-    /// Attach it explicitly to a runtime services object when these diagnostics
-    /// are wanted.
+    /// 빌드 정보, 증분 로그, 메트릭, 스크린샷 명령을 같은 Bridge에 추가합니다.
+    /// 이 컴포넌트를 빼면 진단 명령만 사라집니다.
     /// </summary>
+    [DefaultExecutionOrder(-900)]
+    [DisallowMultipleComponent]
+    [RequireComponent(typeof(GameRuntimeMcpBridge))]
     public sealed class UnityRuntimeDiagnosticsProvider : MonoBehaviour
     {
+        public const string BuildInfoCommand = "runtime.build_info";
+        public const string LogsReadCommand = "runtime.logs.read";
+        public const string MetricsCommand = "runtime.metrics.snapshot";
+        public const string ScreenshotCommand = "runtime.capture_screenshot";
+
         [Serializable]
-        public sealed class BuildInfoResult
+        private sealed class Request<T>
+        {
+            public T payload;
+        }
+
+        [Serializable]
+        private sealed class LogPayload
+        {
+            public long sinceSequence;
+            public string level;
+            public string contains;
+            public int limit;
+            public bool includeStackTrace;
+        }
+
+        [Serializable]
+        public sealed class BuildInfo
         {
             public string product;
             public string version;
-            public string engineVersion;
+            public string unityVersion;
             public string buildId;
             public bool developmentBuild;
             public string platform;
@@ -31,17 +51,7 @@ namespace lLCroweTool.GameRuntimeMcpHost
         }
 
         [Serializable]
-        public sealed class LogReadRequest
-        {
-            public long sinceSequence;
-            public string level;
-            public string contains;
-            public int limit = 50;
-            public bool includeStackTrace;
-        }
-
-        [Serializable]
-        public sealed class LogEntryResult
+        public sealed class LogEntry
         {
             public long sequence;
             public string timestampUtc;
@@ -51,9 +61,9 @@ namespace lLCroweTool.GameRuntimeMcpHost
         }
 
         [Serializable]
-        public sealed class LogReadResult
+        public sealed class LogPage
         {
-            public LogEntryResult[] entries;
+            public LogEntry[] entries;
             public long oldestSequence;
             public long newestSequence;
             public long nextSequence;
@@ -63,23 +73,21 @@ namespace lLCroweTool.GameRuntimeMcpHost
         }
 
         [Serializable]
-        public sealed class MetricsSnapshotResult
+        public sealed class Metrics
         {
             public int frameCount;
             public float unscaledDeltaTimeMs;
             public float smoothDeltaTimeMs;
             public float approximateFps;
             public long managedMemoryBytes;
-            public long totalAllocatedMemoryBytes;
-            public long totalReservedMemoryBytes;
-            public long monoHeapBytes;
-            public long monoUsedBytes;
+            public long allocatedMemoryBytes;
+            public long reservedMemoryBytes;
             public int systemMemoryMb;
             public int graphicsMemoryMb;
         }
 
         [Serializable]
-        public sealed class ScreenshotResult
+        public sealed class Screenshot
         {
             public bool queued;
             public string path;
@@ -88,129 +96,134 @@ namespace lLCroweTool.GameRuntimeMcpHost
 
         private sealed class LogRecord
         {
-            public long Sequence;
-            public string TimestampUtc;
-            public string Level;
-            public string Message;
-            public string StackTrace;
+            public long sequence;
+            public string timestampUtc;
+            public string level;
+            public string message;
+            public string stackTrace;
         }
 
-        private const int MaximumLogCapacity = 4096;
-        private const int MaximumLogReadCount = 200;
-        private const int DefaultLogReadCount = 50;
-
-        [Header("Runtime diagnostics")]
+        [Header("Log Buffer")]
         [SerializeField, Min(16)] private int logCapacity = 512;
-        [SerializeField, Min(128)] private int maxLogMessageCharacters = 2048;
+        [SerializeField, Min(128)] private int maxMessageCharacters = 2048;
         [SerializeField, Min(128)] private int maxStackTraceCharacters = 4096;
+
+        [Header("Build / Capture")]
+        [SerializeField] private string sourceRevision = "";
         [SerializeField] private string diagnosticsFolderName = "GameRuntimeMcpDiagnostics";
-        [SerializeField] private string sourceRevision = string.Empty;
 
         private readonly object logGate = new object();
-        private readonly Queue<LogRecord> logRecords = new Queue<LogRecord>();
-        private long latestLogSequence;
+        private readonly Queue<LogRecord> logQueue = new Queue<LogRecord>();
+
+        private GameRuntimeMcpBridge bridge;
+        private long latestSequence;
         private bool logSubscribed;
+
+        private GameRuntimeMcpBridge.RuntimeCommandHandler buildInfoHandler;
+        private GameRuntimeMcpBridge.RuntimeCommandHandler logsHandler;
+        private GameRuntimeMcpBridge.RuntimeCommandHandler metricsHandler;
+        private GameRuntimeMcpBridge.RuntimeCommandHandler screenshotHandler;
+
+        private void Awake()
+        {
+            bridge = GetComponent<GameRuntimeMcpBridge>();
+            buildInfoHandler = HandleBuildInfo;
+            logsHandler = HandleLogs;
+            metricsHandler = HandleMetrics;
+            screenshotHandler = HandleScreenshot;
+        }
 
         private void OnEnable()
         {
+            if (!Application.isPlaying)
+                return;
+
             SubscribeLogs();
+            RegisterCommands();
         }
 
         private void OnDisable()
         {
+            UnregisterCommands();
             UnsubscribeLogs();
         }
 
-        /// <summary>Reads stable identity for the currently running Player build.</summary>
-        public BuildInfoResult ReadBuildInfo()
+        public BuildInfo ReadBuildInfo()
         {
-            return new BuildInfoResult
+            string product = string.IsNullOrWhiteSpace(bridge.SessionProductName)
+                ? Application.productName
+                : bridge.SessionProductName.Trim();
+
+            return new BuildInfo
             {
-                product = Application.productName,
+                product = product,
                 version = Application.version,
-                engineVersion = Application.unityVersion,
+                unityVersion = Application.unityVersion,
                 buildId = Application.buildGUID,
                 developmentBuild = Debug.isDebugBuild,
                 platform = Application.platform.ToString(),
                 scriptingBackend = GetScriptingBackend(),
-                sourceRevision = sourceRevision ?? string.Empty,
+                sourceRevision = sourceRevision ?? "",
                 processId = System.Diagnostics.Process.GetCurrentProcess().Id
             };
         }
 
-        /// <summary>Reads a bounded incremental slice of captured Unity logs.</summary>
-        public LogReadResult ReadLogs(LogReadRequest request = null)
+        public LogPage ReadLogs(
+            long sinceSequence = 0,
+            string level = "",
+            string contains = "",
+            int limit = 50,
+            bool includeStackTrace = false)
         {
-            request ??= new LogReadRequest();
-            int limit = request.limit <= 0
-                ? DefaultLogReadCount
-                : Mathf.Clamp(request.limit, 1, MaximumLogReadCount);
-            long requestedSinceSequence = Math.Max(0L, request.sinceSequence);
-            string level = request.level?.Trim() ?? string.Empty;
-            string contains = request.contains ?? string.Empty;
+            int resultLimit = Mathf.Clamp(limit <= 0 ? 50 : limit, 1, 200);
+            long requestedSequence = Math.Max(0L, sinceSequence);
+            level = level?.Trim() ?? "";
+            contains = contains ?? "";
 
             lock (logGate)
             {
-                bool cursorReset = requestedSinceSequence > latestLogSequence;
-                long sinceSequence = cursorReset ? 0L : requestedSinceSequence;
-                bool hasRecords = logRecords.Count > 0;
-                long oldestSequence = hasRecords
-                    ? logRecords.Peek().Sequence
-                    : 0L;
-                bool truncated = hasRecords && sinceSequence < oldestSequence - 1;
-                long nextSequence = truncated
-                    ? oldestSequence - 1
-                    : sinceSequence;
+                bool cursorReset = requestedSequence > latestSequence;
+                long cursor = cursorReset ? 0L : requestedSequence;
+                long oldest = logQueue.Count > 0 ? logQueue.Peek().sequence : 0L;
+                bool truncated = oldest > 0 && cursor < oldest - 1;
+                long next = truncated ? oldest - 1 : cursor;
                 bool hasMore = false;
-                var resultList = new List<LogEntryResult>(Math.Min(limit, logRecords.Count));
+                var resultList = new List<LogEntry>(Math.Min(resultLimit, logQueue.Count));
 
-                foreach (LogRecord record in logRecords)
+                foreach (LogRecord record in logQueue)
                 {
-                    if (record.Sequence <= sinceSequence)
-                    {
+                    if (record.sequence <= cursor)
                         continue;
-                    }
-
-                    if (resultList.Count >= limit)
+                    if (resultList.Count >= resultLimit)
                     {
                         hasMore = true;
                         break;
                     }
 
-                    // Advance across inspected non-matching records, but never skip records
-                    // beyond the bounded result page.
-                    nextSequence = record.Sequence;
-
+                    next = record.sequence;
                     if (!string.IsNullOrEmpty(level) &&
-                        !string.Equals(record.Level, level, StringComparison.OrdinalIgnoreCase))
-                    {
+                        !string.Equals(record.level, level, StringComparison.OrdinalIgnoreCase))
                         continue;
-                    }
-
                     if (!string.IsNullOrEmpty(contains) &&
-                        record.Message.IndexOf(contains, StringComparison.OrdinalIgnoreCase) < 0)
-                    {
+                        record.message.IndexOf(contains, StringComparison.OrdinalIgnoreCase) < 0)
                         continue;
-                    }
 
-                    resultList.Add(new LogEntryResult
+                    resultList.Add(new LogEntry
                     {
-                        sequence = record.Sequence,
-                        timestampUtc = record.TimestampUtc,
-                        level = record.Level,
-                        message = record.Message,
-                        stackTrace = request.includeStackTrace
-                            ? record.StackTrace
-                            : string.Empty
+                        sequence = record.sequence,
+                        timestampUtc = record.timestampUtc,
+                        level = record.level,
+                        message = record.message,
+                        stackTrace = includeStackTrace ? record.stackTrace : ""
                     });
                 }
 
-                return new LogReadResult
+                return new LogPage
                 {
                     entries = resultList.ToArray(),
-                    oldestSequence = oldestSequence,
-                    newestSequence = latestLogSequence,
-                    nextSequence = nextSequence,
+                    oldestSequence = oldest,
+                    newestSequence = latestSequence,
+                    nextSequence = next,
                     truncated = truncated,
                     hasMore = hasMore,
                     cursorReset = cursorReset
@@ -218,45 +231,37 @@ namespace lLCroweTool.GameRuntimeMcpHost
             }
         }
 
-        /// <summary>Reads one cheap, bounded performance snapshot from the current frame.</summary>
-        public MetricsSnapshotResult ReadMetricsSnapshot()
+        public Metrics ReadMetrics()
         {
-            float smoothDeltaTime = Time.smoothDeltaTime;
-            return new MetricsSnapshotResult
+            float smoothDelta = Time.smoothDeltaTime;
+            return new Metrics
             {
                 frameCount = Time.frameCount,
                 unscaledDeltaTimeMs = Time.unscaledDeltaTime * 1000f,
-                smoothDeltaTimeMs = smoothDeltaTime * 1000f,
-                approximateFps = smoothDeltaTime > 0f ? 1f / smoothDeltaTime : 0f,
+                smoothDeltaTimeMs = smoothDelta * 1000f,
+                approximateFps = smoothDelta > 0f ? 1f / smoothDelta : 0f,
                 managedMemoryBytes = GC.GetTotalMemory(false),
-                totalAllocatedMemoryBytes = Profiler.GetTotalAllocatedMemoryLong(),
-                totalReservedMemoryBytes = Profiler.GetTotalReservedMemoryLong(),
-                monoHeapBytes = Profiler.GetMonoHeapSizeLong(),
-                monoUsedBytes = Profiler.GetMonoUsedSizeLong(),
+                allocatedMemoryBytes = Profiler.GetTotalAllocatedMemoryLong(),
+                reservedMemoryBytes = Profiler.GetTotalReservedMemoryLong(),
                 systemMemoryMb = SystemInfo.systemMemorySize,
                 graphicsMemoryMb = SystemInfo.graphicsMemorySize
             };
         }
 
-        /// <summary>
-        /// Queues one screenshot under Application.persistentDataPath.
-        /// The caller does not supply a filesystem path.
-        /// </summary>
-        public ScreenshotResult CaptureScreenshot()
+        public Screenshot CaptureScreenshot()
         {
-            string safeFolder = Path.GetFileName(diagnosticsFolderName);
-            if (string.IsNullOrWhiteSpace(safeFolder))
-            {
-                safeFolder = "GameRuntimeMcpDiagnostics";
-            }
+            string folderName = Path.GetFileName(diagnosticsFolderName);
+            if (string.IsNullOrWhiteSpace(folderName))
+                folderName = "GameRuntimeMcpDiagnostics";
 
-            string directory = Path.Combine(Application.persistentDataPath, safeFolder);
+            string directory = Path.Combine(Application.persistentDataPath, folderName);
             Directory.CreateDirectory(directory);
-            string fileName = $"runtime_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.png";
-            string outputPath = Path.Combine(directory, fileName);
+            string outputPath = Path.Combine(
+                directory,
+                $"runtime_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.png");
             ScreenCapture.CaptureScreenshot(outputPath);
 
-            return new ScreenshotResult
+            return new Screenshot
             {
                 queued = true,
                 path = outputPath,
@@ -264,13 +269,72 @@ namespace lLCroweTool.GameRuntimeMcpHost
             };
         }
 
+        private void RegisterCommands()
+        {
+            if (bridge == null)
+                return;
+
+            if (!bridge.RegisterHandler(BuildInfoCommand, buildInfoHandler, out string error) ||
+                !bridge.RegisterHandler(LogsReadCommand, logsHandler, out error) ||
+                !bridge.RegisterHandler(MetricsCommand, metricsHandler, out error) ||
+                !bridge.RegisterHandler(ScreenshotCommand, screenshotHandler, out error))
+            {
+                UnregisterCommands();
+                Debug.LogError($"[Runtime Diagnostics] 명령 등록 실패: {error}", this);
+            }
+        }
+
+        private void UnregisterCommands()
+        {
+            if (bridge == null)
+                return;
+
+            bridge.UnregisterHandler(BuildInfoCommand, buildInfoHandler);
+            bridge.UnregisterHandler(LogsReadCommand, logsHandler);
+            bridge.UnregisterHandler(MetricsCommand, metricsHandler);
+            bridge.UnregisterHandler(ScreenshotCommand, screenshotHandler);
+        }
+
+        private object HandleBuildInfo(string requestJson)
+        {
+            return ReadBuildInfo();
+        }
+
+        private object HandleLogs(string requestJson)
+        {
+            LogPayload payload = null;
+            try
+            {
+                Request<LogPayload> request = JsonUtility.FromJson<Request<LogPayload>>(requestJson);
+                payload = request?.payload;
+            }
+            catch (ArgumentException)
+            {
+            }
+
+            payload = payload ?? new LogPayload();
+            return ReadLogs(
+                payload.sinceSequence,
+                payload.level,
+                payload.contains,
+                payload.limit,
+                payload.includeStackTrace);
+        }
+
+        private object HandleMetrics(string requestJson)
+        {
+            return ReadMetrics();
+        }
+
+        private object HandleScreenshot(string requestJson)
+        {
+            return CaptureScreenshot();
+        }
+
         private void SubscribeLogs()
         {
             if (logSubscribed)
-            {
                 return;
-            }
-
             Application.logMessageReceivedThreaded += OnLogMessageReceived;
             logSubscribed = true;
         }
@@ -278,45 +342,37 @@ namespace lLCroweTool.GameRuntimeMcpHost
         private void UnsubscribeLogs()
         {
             if (!logSubscribed)
-            {
                 return;
-            }
-
             Application.logMessageReceivedThreaded -= OnLogMessageReceived;
             logSubscribed = false;
         }
 
         private void OnLogMessageReceived(string condition, string stackTrace, LogType type)
         {
-            int capacity = Mathf.Clamp(logCapacity, 16, MaximumLogCapacity);
             var record = new LogRecord
             {
-                TimestampUtc = DateTime.UtcNow.ToString("O"),
-                Level = type.ToString().ToLowerInvariant(),
-                Message = Bound(condition, Math.Max(128, maxLogMessageCharacters)),
-                StackTrace = Bound(stackTrace, Math.Max(128, maxStackTraceCharacters))
+                timestampUtc = DateTime.UtcNow.ToString("O"),
+                level = type.ToString().ToLowerInvariant(),
+                message = Bound(condition, Math.Max(128, maxMessageCharacters)),
+                stackTrace = Bound(stackTrace, Math.Max(128, maxStackTraceCharacters))
             };
 
             lock (logGate)
             {
-                record.Sequence = ++latestLogSequence;
-                logRecords.Enqueue(record);
-                while (logRecords.Count > capacity)
-                {
-                    logRecords.Dequeue();
-                }
+                record.sequence = ++latestSequence;
+                logQueue.Enqueue(record);
+                int capacity = Mathf.Clamp(logCapacity, 16, 4096);
+                while (logQueue.Count > capacity)
+                    logQueue.Dequeue();
             }
         }
 
-        private static string Bound(string value, int maximumCharacters)
+        private static string Bound(string value, int maxCharacters)
         {
-            value ??= string.Empty;
-            if (value.Length <= maximumCharacters)
-            {
-                return value;
-            }
-
-            return value.Substring(0, maximumCharacters) + "... (truncated)";
+            value = value ?? "";
+            return value.Length <= maxCharacters
+                ? value
+                : value.Substring(0, maxCharacters) + "... (truncated)";
         }
 
         private static string GetScriptingBackend()
