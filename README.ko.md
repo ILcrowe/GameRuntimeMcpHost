@@ -2,23 +2,23 @@
 
 [English README](README.md)
 
-명시적으로 허용한 게임 런타임 명령을 MCP 호환 AI 클라이언트에 제공하는 의존성 없는 stdio Host.
+명시적으로 허용한 게임 런타임 명령을 MCP 호환 AI Client에 제공하는 의존성 없는 stdio Host.
 
 ```text
 MCP Client
   -> stdio
   -> GameRuntimeMcpHost
-  -> 127.0.0.1 HTTP RPC + 세션별 Token
+  -> 127.0.0.1 HTTP RPC + Session별 Token
   -> 게임 소유 Runtime Adapter
 ```
 
-Host의 책임은 전송. 합법 행동 판정, 권한, 게임 규칙, 권위 상태 변경은 게임 소유 Adapter의 책임.
+Host의 책임은 전송과 공개 Tool 입력 검증. 합법 행동 판정, 권한, 게임 규칙, 권위 상태 변경은 게임 소유 Adapter의 책임.
 
 ## 요구사항
 
 - Python 3.10+
 - MCP 호환 Client
-- 세션 기술자 생성과 RPC 계약 처리가 가능한 게임 Runtime Adapter
+- Session Descriptor 생성과 RPC 계약 처리가 가능한 게임 Runtime Adapter
 - Host와 Runtime의 동일 PC 실행
 
 ## 설치
@@ -38,7 +38,7 @@ python -m unittest discover -s tests -v
 
 ## 빠른 시작
 
-명시적 세션 파일:
+명시적 Session 파일:
 
 ```powershell
 game-runtime-mcp-host `
@@ -55,7 +55,49 @@ game-runtime-mcp-host `
   --tools-file examples\unity\game-runtime.tools.json
 ```
 
-Host 선실행 지원. Runtime 재시작 뒤 다음 Tool 호출에서 최신 세션 재탐색.
+Host 선실행 지원. Runtime 재시작 뒤 다음 Tool 호출에서 최신 Session 재탐색.
+
+## Tool 입력 검증
+
+`tools/call` 인자를 Runtime에 전달하기 전에 Manifest `inputSchema` 검사.
+
+```text
+잘못된 자료형
+필수 인자 누락
+허용되지 않은 인자
+범위·길이 초과
+anyOf 불일치
+-> JSON-RPC -32602
+-> Runtime RPC 호출 없음
+```
+
+지원하지 않는 Schema Keyword는 Host 시작 시 오류. 제약의 조용한 무시 금지.
+
+상세: [`TOOL_INPUT_VALIDATION.ko.md`](TOOL_INPUT_VALIDATION.ko.md)
+
+## 다중 Runtime 선택
+
+같은 제품의 Client·Server·Player를 여러 개 실행할 때 선택자 사용.
+
+```powershell
+game-runtime-mcp-host `
+  --session-name game-runtime-mcp-session.json `
+  --session-product ExampleGame `
+  --session-instance client-01 `
+  --session-role client `
+  --tools-file C:\path\to\game-runtime.tools.json
+```
+
+Wildcard가 없는 `game-runtime-mcp-session.json`은 다음을 함께 검색.
+
+```text
+game-runtime-mcp-session.json
+game-runtime-mcp-session-*.json
+```
+
+선택자가 없으면 기존 동작 유지: Product가 일치하는 가장 최근 Session 선택.
+
+상세: [`MULTI_RUNTIME_SELECTION.ko.md`](MULTI_RUNTIME_SELECTION.ko.md)
 
 ## Unity 통합 샘플
 
@@ -74,7 +116,7 @@ examples/unity/
 
 역할:
 
-- `GameRuntimeMcpBridge`: 세션·Token·Loopback Listener·메인 스레드 Queue·Command Registry·범용 진단
+- `GameRuntimeMcpBridge`: Session·Token·Loopback Listener·Main Thread Queue·Command Registry·범용 진단
 - `SampleGameRuntimeHandler`: 상태·주변·이동·상호작용·채팅
 - `SampleRuntimeMcpInteractable`: Inspector 부착형 상호작용 예제
 - `game-runtime.tools.json`: MCP Tool Schema와 내부 RPC Command 매핑
@@ -112,7 +154,7 @@ examples/unity/
 기능군 Handler
 -> GameRuntimeMcpBridge.Bind(...)
 -> RegisterAll(owner, ...)
--> 게임 소유 서비스 호출
+-> 게임 소유 Service 호출
 -> RuntimeCommandResult.Ok / Fail
 -> OnDisable에서 UnregisterAll(owner)
 ```
@@ -129,6 +171,7 @@ skills/game-runtime-mcp-host/
 
 ```text
 대상 판별
+-> 다중 Session이면 Instance·Role 고정
 -> runtime_status
 -> 필요 시 runtime_build_info
 -> 정확한 게임 소유 Tool
@@ -222,7 +265,7 @@ codex mcp add game_runtime `
 
 등록·Skill 변경 뒤 새 Client Session.
 
-## 세션 기술자
+## Session Descriptor
 
 게임 소유 Adapter가 `Application.persistentDataPath` 등에 게시하는 계약:
 
@@ -234,9 +277,13 @@ codex mcp add game_runtime `
   "tokenHeader": "X-Game-Runtime-Token",
   "rpcPath": "/rpc",
   "product": "UnityGameRuntime",
-  "processId": 1234
+  "processId": 1234,
+  "instanceId": "client-01",
+  "role": "client"
 }
 ```
+
+`instanceId`·`role`은 선택형 식별 메타데이터.
 
 제약:
 
@@ -263,17 +310,39 @@ codex mcp add game_runtime `
 | `GAME_RUNTIME_MCP_SESSION` | `--session-file` |
 | `GAME_RUNTIME_MCP_SESSION_NAME` | `--session-name` |
 | `GAME_RUNTIME_MCP_SESSION_PRODUCT` | `--session-product` |
+| `GAME_RUNTIME_MCP_SESSION_INSTANCE` | `--session-instance` |
+| `GAME_RUNTIME_MCP_SESSION_ROLE` | `--session-role` |
 | `GAME_RUNTIME_MCP_TOOLS` | `--tools-file` |
 | `GAME_RUNTIME_GROK_SOURCE_HOME` | 격리 Grok Home용 인증 원본 |
 
 명령행 값 우선.
+
+## 자동 테스트
+
+GitHub Actions:
+
+```text
+Windows
+Python 3.10
+compileall
+unittest discover
+```
+
+로컬:
+
+```powershell
+python -m compileall -q src tests
+python -m unittest discover -s tests -v
+```
 
 ## 문제 해결
 
 | 증상 | 확인 |
 |---|---|
 | Tool 미노출 | Manifest JSON, Host 등록 경로, 새 Client Session |
-| Runtime Session 없음 | 게임 실행, Session Name, Product, 명시적 Session File |
+| Tool 인자 거부 | `inputSchema`, 필수 인자, 자료형, 범위, 미정의 인자 |
+| Runtime Session 없음 | 게임 실행, Session Name, Product, Instance, Role |
+| 잘못된 Player 연결 | `--session-instance`, `--session-role`, `runtime_status` |
 | Connection Refused | Runtime Listener, 최신 Descriptor Port |
 | Endpoint 거부 | `127.0.0.1` 또는 `::1` |
 | 인증 실패 | Runtime 재시작 여부, 읽기 Tool 재호출을 통한 최신 Token 재로딩 |
@@ -287,10 +356,12 @@ codex mcp add game_runtime `
 
 ```text
 MCP initialize / ping / tools
+Tool 입력 Schema 검증
 Localhost RPC
 Token 전달
 Bounded Timeout
 Session 재탐색
+다중 Runtime 선택
 Unity 통합 샘플
 범용 Runtime 진단
 Provider Session 전송
