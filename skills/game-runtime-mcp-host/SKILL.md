@@ -50,6 +50,18 @@ description: GameRuntimeMcpHost를 통해 실행 중인 빌드 Player를 제어�
 
 재시도와 권한 규칙은 [references/gameplay-control.md](references/gameplay-control.md)를 따른다.
 
+## Unity 게임 플레이 샘플
+
+다음 도구가 함께 노출되어 있으면 저장소의 등록형 게임 플레이 샘플 계약으로 취급한다.
+
+- `get_game_state`
+- `get_surroundings`
+- `player_move_to`
+- `player_interact`
+- `send_in_game_chat`
+
+고정 호출 순서와 이동·상호작용 검증 방식은 [references/unity-gameplay-sample.md](references/unity-gameplay-sample.md)를 따른다.
+
 ## 범용 진단
 
 범용 진단은 관측 도구이며 게임 권한을 가지지 않는다.

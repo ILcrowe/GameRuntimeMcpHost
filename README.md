@@ -67,6 +67,21 @@ The repository includes a copy-ready Unity adapter, optional generic diagnostics
 
 The sample components are explicit `MonoBehaviour`s; they do not install a hidden runtime bootstrap or a second transport.
 
+## Unity gameplay sample
+
+[`examples/unity-gameplay/README.md`](examples/unity-gameplay/README.md) is a registered gameplay sample for observing and controlling a running Unity Player through explicit tools:
+
+```text
+runtime_status
+get_game_state
+get_surroundings
+player_move_to
+player_interact
+send_in_game_chat
+```
+
+It uses the current host `protocol` / `command` / `payload` request contract and includes actual sample Transform movement, bounded nearby interaction, and a game-owned chat event. It is an alternative to `examples/unity`; do not enable both bridges in the same runtime path.
+
 ## Optional runtime diagnostics
 
 [`RUNTIME_DIAGNOSTICS.md`](RUNTIME_DIAGNOSTICS.md) defines a small game-independent observation surface:
@@ -93,6 +108,8 @@ target gate
   -> result/state verification
   -> optional diagnostics
 ```
+
+The Unity gameplay sample procedure is documented in [`unity-gameplay-sample.md`](skills/game-runtime-mcp-host/references/unity-gameplay-sample.md).
 
 Install it project-locally for Codex with:
 
@@ -182,7 +199,8 @@ A tool manifest maps MCP tool names to game-owned RPC commands and JSON Schemas.
 |---|---|
 | [`tools.example.json`](examples/tools.example.json) | Minimal generic contract |
 | [`runtime-diagnostics.tools.json`](examples/runtime-diagnostics.tools.json) | Optional generic runtime diagnostics contract |
-| [`unity-runtime-sample.tools.json`](examples/unity/unity-runtime-sample.tools.json) | Copy-ready Unity C# adapter sample |
+| [`unity-runtime-sample.tools.json`](examples/unity/unity-runtime-sample.tools.json) | Copy-ready Unity C# diagnostics adapter sample |
+| [`game-runtime.tools.json`](examples/unity-gameplay/game-runtime.tools.json) | Unity state, movement, interaction, and chat sample |
 | [`storyllmmaster.tools.json`](examples/storyllmmaster.tools.json) | External game-master control surface |
 | [`llm-conversation-runtime.tools.json`](examples/llm-conversation-runtime.tools.json) | Multi-participant conversation runtime |
 
@@ -210,12 +228,13 @@ Command-line values take precedence over environment defaults.
 | Endpoint is rejected | Use a numeric loopback address such as `127.0.0.1` or `::1`; remote hosts are intentionally blocked. |
 | Unauthorized response | Restart the game or retry a read-only call so the host reloads the latest session token. |
 | Diagnostics are unavailable | Attach and enable `UnityRuntimeDiagnosticsProvider`, or remove unpublished diagnostics from the manifest. |
+| Gameplay tools are unavailable | Confirm that `GameRuntimeMcpBridge` and `SampleGamePlayActionHandler` are enabled and that the gameplay manifest is selected. |
 | Korean text is corrupted | Launch Python with `-X utf8` and set `PYTHONIOENCODING=utf-8` and `PYTHONUTF8=1`. |
 | Grok inherits personal MCP configuration | Use `GrokHeadlessSession`; it creates an isolated per-scope `GROK_HOME` and copies only cached authentication. |
 
 ## Scope and limitations
 
-- Included: MCP initialize, ping, tool listing/calls, localhost RPC, token forwarding, bounded timeout, session rediscovery, optional runtime diagnostics examples, and CLI-backed external-agent session transport
+- Included: MCP initialize, ping, tool listing/calls, localhost RPC, token forwarding, bounded timeout, session rediscovery, optional runtime diagnostics examples, a Unity gameplay example, and CLI-backed external-agent session transport
 - Excluded: arbitrary C# execution, remote binding, game-file access, provider SDK calls, game-specific prompt construction, and game-rule validation
 - Adapter responsibility: legal-action validation, idempotency, timeout fallback, authoritative state mutation, and save/run scope selection
 

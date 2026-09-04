@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## 미출시
+
+- Unity 게임 상태 조회, 주변 탐색, 실제 샘플 이동, 명시적 상호작용, 인게임 채팅을 제공하는 등록형 게임 플레이 샘플을 추가했습니다.
+- 게임 플레이 샘플 Bridge를 현재 Host의 `protocol` / `command` / `payload` RPC 계약과 일치시켰습니다.
+- 세션별 토큰, 제한된 요청 Body, 메인 스레드 처리 예산, Timeout 상태 구분, 안전한 Listener 종료를 적용했습니다.
+- 낮은 추론량 Skill에 게임 플레이 샘플의 연결·이동·상호작용·검증 순서를 추가했습니다.
+- 게임 플레이 도구 매니페스트 정적 계약 테스트와 인증·상태·이동·상호작용·채팅 PlayMode 왕복 테스트를 추가했습니다.
+
 ## 0.3.0 — 2026-09-04
 
 - Added provider-neutral JSON-RPC subprocess, session-descriptor, and append-only audit-stream primitives.

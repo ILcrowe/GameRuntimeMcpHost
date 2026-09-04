@@ -48,3 +48,7 @@ GameRuntimeMcpHost는 전송 계층이다. 합법 행동, 검증, 권위 상태 
 `대기 중 의사결정 -> 문맥 -> 행동 제출 -> 행동 결과 -> 갱신 상태`
 
 런타임 재연결 또는 Turn Revision 변경 뒤 오래된 문맥으로 행동을 제출하지 않는다.
+
+## Unity 게임 플레이 샘플
+
+`get_game_state`, `get_surroundings`, `player_move_to`, `player_interact`, `send_in_game_chat`이 함께 노출된 샘플은 [unity-gameplay-sample.md](unity-gameplay-sample.md)의 고정 순서를 사용한다.

@@ -67,9 +67,24 @@ game-runtime-mcp-host `
 
 모두 명시적으로 붙이는 `MonoBehaviour`입니다. 숨은 런타임 부트스트랩이나 두 번째 전송 계층을 설치하지 않습니다.
 
+## Unity 게임 플레이 샘플
+
+[`examples/unity-gameplay/README.ko.md`](examples/unity-gameplay/README.ko.md)는 LLM이 실행 중인 Unity 게임을 관찰하고 제한된 명령으로 직접 플레이하는 등록형 샘플입니다.
+
+```text
+runtime_status
+get_game_state
+get_surroundings
+player_move_to
+player_interact
+send_in_game_chat
+```
+
+이 샘플은 현재 Host의 `protocol` / `command` / `payload` 요청 계약을 사용하며, 실제 Transform 이동, 반경 제한 상호작용, 게임 소유 채팅 이벤트를 포함합니다. `examples/unity`와 대체 관계이므로 같은 실행 경로에서 두 Bridge를 동시에 활성화하지 않습니다.
+
 ## 선택형 런타임 진단
 
-[`RUNTIME_DIAGNOSTICS.md`](RUNTIME_DIAGNOSTICS.md)는 다음과 같은 작은 게임 독립 관측면을 정의합니다.
+[`RUNTIME_DIAGNOSTICS.ko.md`](RUNTIME_DIAGNOSTICS.ko.md)는 다음과 같은 작은 게임 독립 관측면을 정의합니다.
 
 | MCP 도구 | 용도 |
 |---|---|
@@ -93,6 +108,8 @@ game-runtime-mcp-host `
   -> 결과/상태 재검증
   -> 필요한 진단만 추가
 ```
+
+Unity 게임 플레이 샘플의 세부 순서는 [`unity-gameplay-sample.md`](skills/game-runtime-mcp-host/references/unity-gameplay-sample.md)에 있습니다.
 
 Codex 프로젝트 로컬 설치:
 
@@ -182,7 +199,8 @@ endpoint는 숫자형 루프백 주소여야 합니다. 토큰은 로그나 MCP 
 |---|---|
 | [`tools.example.json`](examples/tools.example.json) | 최소 범용 계약 |
 | [`runtime-diagnostics.tools.json`](examples/runtime-diagnostics.tools.json) | 선택형 범용 런타임 진단 계약 |
-| [`unity-runtime-sample.tools.json`](examples/unity/unity-runtime-sample.tools.json) | 복사형 Unity C# 어댑터 샘플 |
+| [`unity-runtime-sample.tools.json`](examples/unity/unity-runtime-sample.tools.json) | 복사형 Unity C# 진단 어댑터 샘플 |
+| [`game-runtime.tools.json`](examples/unity-gameplay/game-runtime.tools.json) | Unity 상태 조회·이동·상호작용·채팅 샘플 |
 | [`storyllmmaster.tools.json`](examples/storyllmmaster.tools.json) | 외부 게임 마스터 제어면 |
 | [`llm-conversation-runtime.tools.json`](examples/llm-conversation-runtime.tools.json) | 다중 참여자 대화 런타임 |
 
@@ -210,12 +228,13 @@ endpoint는 숫자형 루프백 주소여야 합니다. 토큰은 로그나 MCP 
 | endpoint 거부 | `127.0.0.1` 또는 `::1` 같은 숫자형 루프백 주소를 사용합니다. 원격 주소는 의도적으로 차단됩니다. |
 | 인증 실패 | 게임을 재시작하거나 읽기 전용 호출을 다시 시도해 최신 세션 토큰을 읽게 합니다. |
 | 진단 사용 불가 | `UnityRuntimeDiagnosticsProvider`를 추가·활성화하거나 구현하지 않은 진단 도구를 매니페스트에서 제거합니다. |
+| 게임 플레이 명령 사용 불가 | `GameRuntimeMcpBridge`와 `SampleGamePlayActionHandler`가 활성화됐는지, 게임 플레이 매니페스트를 선택했는지 확인합니다. |
 | 한글 깨짐 | Python에 `-X utf8`을 전달하고 `PYTHONIOENCODING=utf-8`, `PYTHONUTF8=1`을 설정합니다. |
 | Grok가 개인 MCP 설정을 읽음 | `GrokHeadlessSession`은 scope별 `GROK_HOME`을 만들고 사용자 홈에서는 인증만 복사합니다. |
 
 ## 범위와 제한사항
 
-- 포함: MCP 초기화, ping, 도구 조회·호출, localhost RPC, 토큰 전달, 제한된 타임아웃, 세션 재탐색, 선택형 런타임 진단 예제, CLI 기반 외부 Agent 세션 전송
+- 포함: MCP 초기화, ping, 도구 조회·호출, localhost RPC, 토큰 전달, 제한된 타임아웃, 세션 재탐색, 선택형 런타임 진단 예제, Unity 게임 플레이 예제, CLI 기반 외부 Agent 세션 전송
 - 제외: 임의 C# 실행, 원격 bind, 게임 파일 접근, Provider SDK 호출, 게임별 프롬프트 작성, 게임 규칙 검증
 - 게임 어댑터 책임: 합법 행동 검증, 멱등성, 타임아웃 대체 경로, 권위 상태 변경, Save/Run scope 선택
 
