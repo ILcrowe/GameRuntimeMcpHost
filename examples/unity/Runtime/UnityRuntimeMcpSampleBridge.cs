@@ -39,6 +39,11 @@ namespace lLCroweTool.GameRuntimeMcpHost
         private sealed class SamplePayload
         {
             public string message;
+            public long sinceSequence;
+            public string level;
+            public string contains;
+            public int limit;
+            public bool includeStackTrace;
         }
 
         [Serializable]
@@ -118,6 +123,7 @@ namespace lLCroweTool.GameRuntimeMcpHost
         [SerializeField, Min(1)] private int requestTimeoutSeconds = 10;
         [SerializeField, Min(1)] private int maxRequestsPerFrame = 8;
         [SerializeField] private string sessionFileName = DefaultSessionFileName;
+        [SerializeField] private UnityRuntimeDiagnosticsProvider diagnosticsProvider;
 
         private readonly ConcurrentQueue<PendingRequest> requestQueue =
             new ConcurrentQueue<PendingRequest>();
@@ -550,11 +556,79 @@ namespace lLCroweTool.GameRuntimeMcpHost
                         {
                             message = request.payload?.message ?? string.Empty
                         }));
+                case "runtime.build_info":
+                    if (!TryGetDiagnosticsProvider(out UnityRuntimeDiagnosticsProvider buildProvider,
+                            out HttpReply buildFailure))
+                    {
+                        return buildFailure;
+                    }
+
+                    return JsonResultReply(200, buildProvider.ReadBuildInfo());
+                case "runtime.logs.read":
+                    if (!TryGetDiagnosticsProvider(out UnityRuntimeDiagnosticsProvider logProvider,
+                            out HttpReply logFailure))
+                    {
+                        return logFailure;
+                    }
+
+                    SamplePayload logPayload = request.payload ?? new SamplePayload();
+                    return JsonResultReply(
+                        200,
+                        logProvider.ReadLogs(
+                            new UnityRuntimeDiagnosticsProvider.LogReadRequest
+                            {
+                                sinceSequence = logPayload.sinceSequence,
+                                level = logPayload.level,
+                                contains = logPayload.contains,
+                                limit = logPayload.limit,
+                                includeStackTrace = logPayload.includeStackTrace
+                            }));
+                case "runtime.metrics.snapshot":
+                    if (!TryGetDiagnosticsProvider(out UnityRuntimeDiagnosticsProvider metricsProvider,
+                            out HttpReply metricsFailure))
+                    {
+                        return metricsFailure;
+                    }
+
+                    return JsonResultReply(200, metricsProvider.ReadMetricsSnapshot());
+                case "runtime.capture_screenshot":
+                    if (!TryGetDiagnosticsProvider(out UnityRuntimeDiagnosticsProvider captureProvider,
+                            out HttpReply captureFailure))
+                    {
+                        return captureFailure;
+                    }
+
+                    return JsonResultReply(200, captureProvider.CaptureScreenshot());
                 default:
                     return JsonReply(
                         200,
                         Error("unknown_command", $"Unknown command: {request.command}"));
             }
+        }
+
+        private bool TryGetDiagnosticsProvider(
+            out UnityRuntimeDiagnosticsProvider provider,
+            out HttpReply failure)
+        {
+            provider = diagnosticsProvider;
+            if (provider == null)
+            {
+                provider = GetComponent<UnityRuntimeDiagnosticsProvider>();
+                diagnosticsProvider = provider;
+            }
+
+            if (provider != null && provider.isActiveAndEnabled)
+            {
+                failure = default;
+                return true;
+            }
+
+            failure = JsonReply(
+                200,
+                Error(
+                    "diagnostics_unavailable",
+                    "Attach and enable UnityRuntimeDiagnosticsProvider to expose runtime diagnostics."));
+            return false;
         }
 
         private static RuntimeRpcResponse Ok(SampleResult result)
@@ -582,6 +656,17 @@ namespace lLCroweTool.GameRuntimeMcpHost
         private static HttpReply JsonReply(int statusCode, RuntimeRpcResponse response)
         {
             return new HttpReply(statusCode, JsonUtility.ToJson(response));
+        }
+
+        private static HttpReply JsonResultReply<T>(int statusCode, T result)
+            where T : class
+        {
+            string resultJson = result == null
+                ? "null"
+                : JsonUtility.ToJson(result);
+            return new HttpReply(
+                statusCode,
+                $"{{\"ok\":true,\"result\":{resultJson}}}");
         }
 
         private static HttpReply ErrorReply(int statusCode, string code, string message)

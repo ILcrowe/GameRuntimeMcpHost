@@ -47,7 +47,7 @@ game-runtime-mcp-host `
   --tools-file C:\path\to\tools.json
 ```
 
-`LocalLow` 아래에 세션을 만드는 런타임은 자동 탐색을 사용할 수 있습니다. 게임보다 호스트를 먼저 시작해도 유지되며, Play Mode나 프로세스를 재시작하면 다음 호출에서 새 세션을 찾습니다.
+`LocalLow` 아래에 세션을 만드는 런타임은 자동 탐색을 사용할 수 있습니다. 호스트를 게임보다 먼저 시작해도 유지되며, Play Mode나 프로세스를 재시작하면 다음 호출에서 새 세션을 찾습니다.
 
 ```powershell
 game-runtime-mcp-host `
@@ -56,15 +56,52 @@ game-runtime-mcp-host `
   --tools-file examples/llm-conversation-runtime.tools.json
 ```
 
-### Unity C# 어댑터 샘플
+## Unity C# 어댑터 샘플
 
-복사해서 사용할 수 있는 Unity 어댑터와 전용 매니페스트, 플레이 모드(PlayMode) 왕복 테스트를 포함합니다.
+복사해서 사용할 수 있는 Unity 어댑터, 선택형 범용 진단 Provider, 전용 매니페스트, PlayMode 왕복 테스트를 포함합니다.
 
 - [`examples/unity/README.ko.md`](examples/unity/README.ko.md) — 설정, 씬 배치, 확장, 보안 경계
 - [`UnityRuntimeMcpSampleBridge.cs`](examples/unity/Runtime/UnityRuntimeMcpSampleBridge.cs) — 루프백 리스너, 세션 기술자, 제한된 메인 스레드 처리
-- [`unity-runtime-sample.tools.json`](examples/unity/unity-runtime-sample.tools.json) — `runtime_status`, `echo_message`
+- [`UnityRuntimeDiagnosticsProvider.cs`](examples/unity/Runtime/UnityRuntimeDiagnosticsProvider.cs) — 선택형 빌드 식별, 증분 로그, 메트릭, 스크린샷
+- [`unity-runtime-sample.tools.json`](examples/unity/unity-runtime-sample.tools.json) — 런타임 상태, 진단, 메인 스레드 echo
 
-샘플은 명시적 `MonoBehaviour`이며 숨은 런타임 부트스트랩을 설치하지 않습니다.
+모두 명시적으로 붙이는 `MonoBehaviour`입니다. 숨은 런타임 부트스트랩이나 두 번째 전송 계층을 설치하지 않습니다.
+
+## 선택형 런타임 진단
+
+[`RUNTIME_DIAGNOSTICS.md`](RUNTIME_DIAGNOSTICS.md)는 다음과 같은 작은 게임 독립 관측면을 정의합니다.
+
+| MCP 도구 | 용도 |
+|---|---|
+| `runtime_status` | 런타임/프로세스 생존 및 식별 |
+| `runtime_build_info` | 빌드·버전 식별 |
+| `runtime_logs_read` | 제한된 증분 로그 |
+| `runtime_metrics_snapshot` | 단일 성능 스냅샷 |
+| `runtime_capture_screenshot` | 어댑터가 경로를 통제하는 단일 화면 캡처 |
+
+이 도구들은 게임별 명령을 대체하지 않습니다. 빌드 Player의 임의 C# 실행은 기본 계약에서 의도적으로 제외했습니다.
+
+## Agent Skill
+
+[`skills/game-runtime-mcp-host`](skills/game-runtime-mcp-host)에 저추론용 운용 Skill을 포함했습니다. 고정 순서는 다음과 같습니다.
+
+```text
+대상 판별
+  -> runtime status
+  -> 필요 시 build identity
+  -> 정확한 게임 소유 명령
+  -> 결과/상태 재검증
+  -> 필요한 진단만 추가
+```
+
+Codex 프로젝트 로컬 설치:
+
+```powershell
+& "C:\path\to\GameRuntimeMcpHost\skills\install-codex.ps1" `
+  -TargetProject "C:\path\to\YourUnityProject"
+```
+
+수동 설치와 경계는 [`skills/README.md`](skills/README.md)에 있습니다. MCP 등록은 호출 가능한 도구를 제공하고, Skill은 라우팅·재시도·검증 절차를 제공합니다.
 
 ## 외부 Agent 세션 어댑터
 
@@ -74,7 +111,7 @@ game-runtime-mcp-host `
 - `GrokHeadlessSession` — `grok -p`의 구조화 출력과 native `--resume`을 사용하는 제한 시간형 호출
 - `JsonRpcStdioClient`, `ProviderSessionDescriptor`, `AppendOnlyConversationStream` — Provider 중립 프로세스·세션 기반 코드
 
-게임은 여전히 프롬프트, JSON Schema, 대화 규칙, 권위 상태 변경을 소유합니다. 이 모듈들은 Provider 프로세스 전송과 native session 연속성만 담당합니다. 자세한 구조는 [`EXTERNAL_AGENT_SESSIONS.md`](EXTERNAL_AGENT_SESSIONS.md)를 확인합니다.
+게임은 프롬프트, JSON Schema, 대화 규칙, 권위 상태 변경을 계속 소유합니다. 이 모듈들은 Provider 프로세스 전송과 native session 연속성만 담당합니다. [`EXTERNAL_AGENT_SESSIONS.md`](EXTERNAL_AGENT_SESSIONS.md)를 확인합니다.
 
 ## MCP 클라이언트 설정
 
@@ -105,7 +142,7 @@ game-runtime-mcp-host `
 }
 ```
 
-Codex CLI에서는 같은 프로세스를 다음처럼 등록합니다.
+Codex CLI 등록:
 
 ```powershell
 codex mcp add game_runtime `
@@ -117,7 +154,7 @@ codex mcp add game_runtime `
   --tools-file C:\path\to\GameRuntimeMcpHost\examples\llm-conversation-runtime.tools.json
 ```
 
-MCP 등록을 바꾼 뒤에는 클라이언트에서 새 세션을 엽니다.
+MCP 등록이나 프로젝트 로컬 Skill을 바꾼 뒤에는 새 클라이언트 세션을 엽니다.
 
 ## 세션 기술자
 
@@ -139,11 +176,12 @@ endpoint는 숫자형 루프백 주소여야 합니다. 토큰은 로그나 MCP 
 
 ## 도구 매니페스트
 
-도구 매니페스트는 MCP 도구 이름을 게임 소유 RPC 명령 및 JSON 스키마와 연결합니다.
+도구 매니페스트는 MCP 도구 이름을 게임 소유 RPC 명령 및 JSON Schema와 연결합니다.
 
 | 매니페스트 | 용도 |
 |---|---|
 | [`tools.example.json`](examples/tools.example.json) | 최소 범용 계약 |
+| [`runtime-diagnostics.tools.json`](examples/runtime-diagnostics.tools.json) | 선택형 범용 런타임 진단 계약 |
 | [`unity-runtime-sample.tools.json`](examples/unity/unity-runtime-sample.tools.json) | 복사형 Unity C# 어댑터 샘플 |
 | [`storyllmmaster.tools.json`](examples/storyllmmaster.tools.json) | 외부 게임 마스터 제어면 |
 | [`llm-conversation-runtime.tools.json`](examples/llm-conversation-runtime.tools.json) | 다중 참여자 대화 런타임 |
@@ -170,14 +208,15 @@ endpoint는 숫자형 루프백 주소여야 합니다. 토큰은 로그나 MCP 
 | 런타임 세션을 찾지 못함 | 게임을 실행하고 `--session-name`, `--session-product`를 확인하거나 `--session-file`을 직접 지정합니다. |
 | 연결 거부 | 런타임 어댑터의 수신 상태와 세션 기술자의 현재 포트를 확인합니다. |
 | endpoint 거부 | `127.0.0.1` 또는 `::1` 같은 숫자형 루프백 주소를 사용합니다. 원격 주소는 의도적으로 차단됩니다. |
-| 인증 실패 | 게임을 재시작하거나 다음 호출을 다시 시도해 최신 세션 토큰을 읽게 합니다. |
+| 인증 실패 | 게임을 재시작하거나 읽기 전용 호출을 다시 시도해 최신 세션 토큰을 읽게 합니다. |
+| 진단 사용 불가 | `UnityRuntimeDiagnosticsProvider`를 추가·활성화하거나 구현하지 않은 진단 도구를 매니페스트에서 제거합니다. |
 | 한글 깨짐 | Python에 `-X utf8`을 전달하고 `PYTHONIOENCODING=utf-8`, `PYTHONUTF8=1`을 설정합니다. |
 | Grok가 개인 MCP 설정을 읽음 | `GrokHeadlessSession`은 scope별 `GROK_HOME`을 만들고 사용자 홈에서는 인증만 복사합니다. |
 
 ## 범위와 제한사항
 
-- 포함: MCP 초기화, ping, 도구 조회·호출, localhost RPC, 토큰 전달, 제한된 타임아웃, 세션 재탐색, CLI 기반 외부 Agent 세션 전송
-- 제외: 임의 C# 실행, 원격 bind, 게임 파일 접근, LLM 공급자 SDK 호출, 게임별 프롬프트 작성, 게임 규칙 검증
+- 포함: MCP 초기화, ping, 도구 조회·호출, localhost RPC, 토큰 전달, 제한된 타임아웃, 세션 재탐색, 선택형 런타임 진단 예제, CLI 기반 외부 Agent 세션 전송
+- 제외: 임의 C# 실행, 원격 bind, 게임 파일 접근, Provider SDK 호출, 게임별 프롬프트 작성, 게임 규칙 검증
 - 게임 어댑터 책임: 합법 행동 검증, 멱등성, 타임아웃 대체 경로, 권위 상태 변경, Save/Run scope 선택
 
 ## 기여와 보안

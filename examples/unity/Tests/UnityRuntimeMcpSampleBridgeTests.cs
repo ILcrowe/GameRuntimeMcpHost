@@ -29,6 +29,30 @@ namespace lLCroweTool.GameRuntimeMcpHost.Tests
         }
 
         [System.Serializable]
+        private sealed class BuildInfoRpcResponse
+        {
+            public bool ok;
+            public UnityRuntimeDiagnosticsProvider.BuildInfoResult result;
+            public RuntimeRpcError error;
+        }
+
+        [System.Serializable]
+        private sealed class LogsRpcResponse
+        {
+            public bool ok;
+            public UnityRuntimeDiagnosticsProvider.LogReadResult result;
+            public RuntimeRpcError error;
+        }
+
+        [System.Serializable]
+        private sealed class MetricsRpcResponse
+        {
+            public bool ok;
+            public UnityRuntimeDiagnosticsProvider.MetricsSnapshotResult result;
+            public RuntimeRpcError error;
+        }
+
+        [System.Serializable]
         private sealed class SampleResult
         {
             public string product;
@@ -44,10 +68,12 @@ namespace lLCroweTool.GameRuntimeMcpHost.Tests
         }
 
         [UnityTest]
-        public IEnumerator RuntimeStatusAndEchoRoundTripUseThePublishedContract()
+        public IEnumerator RuntimeAndDiagnosticsRoundTripUseThePublishedContract()
         {
+            const string LogMarker = "runtime-diagnostics-round-trip";
             bool previousRunInBackground = Application.runInBackground;
             var hostObject = new GameObject("RuntimeServices");
+            hostObject.AddComponent<UnityRuntimeDiagnosticsProvider>();
             UnityRuntimeMcpSampleBridge bridge =
                 hostObject.AddComponent<UnityRuntimeMcpSampleBridge>();
 
@@ -83,6 +109,50 @@ namespace lLCroweTool.GameRuntimeMcpHost.Tests
             Assert.That(status.result.product, Is.EqualTo(Application.productName));
             Assert.That(status.result.unityVersion, Is.EqualTo(Application.unityVersion));
 
+            string buildInfoJson = null;
+            yield return PostRpc(
+                descriptor,
+                "{\"protocol\":1,\"command\":\"runtime.build_info\",\"payload\":{}}",
+                value => buildInfoJson = value);
+            BuildInfoRpcResponse buildInfo =
+                JsonUtility.FromJson<BuildInfoRpcResponse>(buildInfoJson);
+            Assert.That(buildInfo.ok, Is.True);
+            Assert.That(buildInfo.result.product, Is.EqualTo(Application.productName));
+            Assert.That(buildInfo.result.engineVersion, Is.EqualTo(Application.unityVersion));
+            Assert.That(buildInfo.result.processId, Is.GreaterThan(0));
+
+            Debug.Log(LogMarker);
+            yield return null;
+
+            string logsJson = null;
+            yield return PostRpc(
+                descriptor,
+                "{\"protocol\":1,\"command\":\"runtime.logs.read\",\"payload\":{" +
+                "\"sinceSequence\":0,\"contains\":\"runtime-diagnostics-round-trip\"," +
+                "\"limit\":10}}",
+                value => logsJson = value);
+            LogsRpcResponse logs = JsonUtility.FromJson<LogsRpcResponse>(logsJson);
+            Assert.That(logs.ok, Is.True);
+            Assert.That(logs.result.entries, Is.Not.Null);
+            Assert.That(
+                System.Array.Exists(
+                    logs.result.entries,
+                    entry => entry.message.Contains(LogMarker)),
+                Is.True);
+            Assert.That(logs.result.nextSequence, Is.GreaterThan(0));
+            Assert.That(logs.result.newestSequence, Is.GreaterThanOrEqualTo(logs.result.nextSequence));
+
+            string metricsJson = null;
+            yield return PostRpc(
+                descriptor,
+                "{\"protocol\":1,\"command\":\"runtime.metrics.snapshot\",\"payload\":{}}",
+                value => metricsJson = value);
+            MetricsRpcResponse metrics =
+                JsonUtility.FromJson<MetricsRpcResponse>(metricsJson);
+            Assert.That(metrics.ok, Is.True);
+            Assert.That(metrics.result.frameCount, Is.GreaterThanOrEqualTo(0));
+            Assert.That(metrics.result.managedMemoryBytes, Is.GreaterThan(0));
+
             string echoJson = null;
             yield return PostRpc(
                 descriptor,
@@ -93,7 +163,7 @@ namespace lLCroweTool.GameRuntimeMcpHost.Tests
             Assert.That(echo.result.message, Is.EqualTo("hello runtime"));
 
             string sessionPath = bridge.SessionPath;
-            Object.Destroy(hostObject);
+            UnityEngine.Object.Destroy(hostObject);
             yield return null;
 
             Assert.That(File.Exists(sessionPath), Is.False);
