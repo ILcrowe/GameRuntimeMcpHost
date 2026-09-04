@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "serverName": "unity-game-runtime",
+  "serverVersion": "0.4.0",
+  "tools": [
+    {
+      "name": "runtime_status",
+      "description": "연결된 Unity Player와 현재 프로세스·씬 상태 조회",
+      "command": "runtime.status",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "runtime_build_info",
+      "description": "현재 실행 중인 빌드·Unity 버전·플랫폼·Scripting Backend 식별",
+      "command": "runtime.build_info",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "runtime_logs_read",
+      "description": "Sequence Cursor 기반 제한형 Unity 런타임 로그 조회",
+      "command": "runtime.logs.read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sinceSequence": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0,
+            "description": "이 Sequence 이후 로그만 조회"
+          },
+          "level": {
+            "type": "string",
+            "description": "선택형 로그 심각도 필터"
+          },
+          "contains": {
+            "type": "string",
+            "description": "선택형 메시지 포함 문자열"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50,
+            "description": "한 번에 반환할 최대 로그 수"
+          },
+          "includeStackTrace": {
+            "type": "boolean",
+            "default": false,
+            "description": "Stack Trace 포함 여부"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "runtime_metrics_snapshot",
+      "description": "현재 프레임·메모리 상태의 단일 성능 스냅샷 조회",
+      "command": "runtime.metrics.snapshot",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "runtime_capture_screenshot",
+      "description": "Application.persistentDataPath 아래 관리 경로에 화면 캡처 예약",
+      "command": "runtime.capture_screenshot",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_game_state",
+      "description": "제어 대상의 위치·체력·목표·이동 상태·최근 행동 상태 조회",
+      "command": "game.get_state",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_surroundings",
+      "description": "제어 대상 주변 객체와 상호작용 가능 대상을 거리순으로 조회",
+      "command": "game.get_surroundings",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "radius": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 50,
+            "default": 15,
+            "description": "탐색 반경"
+          },
+          "maxResults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 10,
+            "description": "최대 결과 수"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "player_move_to",
+      "description": "제어 대상을 현재 Y 높이를 유지한 채 지정한 월드 X/Z 좌표로 이동",
+      "command": "player.move_to",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "targetX": {
+            "type": "number",
+            "description": "목표 월드 X 좌표"
+          },
+          "targetZ": {
+            "type": "number",
+            "description": "목표 월드 Z 좌표"
+          }
+        },
+        "required": [
+          "targetX",
+          "targetZ"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "player_interact",
+      "description": "주변 조회에서 얻은 targetId를 우선 사용한 대상 상호작용",
+      "command": "player.interact",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "targetId": {
+            "type": "string",
+            "description": "get_surroundings가 반환한 런타임 대상 ID"
+          },
+          "targetName": {
+            "type": "string",
+            "description": "ID가 없을 때 사용하는 표시 이름"
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "targetId"
+            ]
+          },
+          {
+            "required": [
+              "targetName"
+            ]
+          }
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "send_in_game_chat",
+      "description": "최대 500자의 메시지를 게임 소유 채팅 이벤트로 전달",
+      "command": "chat.send",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "게임에 전달할 채팅 메시지"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

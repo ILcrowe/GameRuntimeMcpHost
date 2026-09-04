@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## 미출시
+
+- 공통 `GameRuntimeMcpBridge` 기반 Unity 통합 샘플
+- Owner 단위 원자적 `RegisterAll`·`UnregisterAll` 명령 등록
+- 게임 상태·주변 조회·이동·상호작용·채팅 샘플
+- Bridge 내장 Build·Log·Metrics·Screenshot 진단
+- 실행별 Token·Loopback Listener·메인 스레드 처리 예산
+- 시작 전 Timeout과 실행 여부 불명 Timeout 구분
+- 한글 XML Summary 주석과 한글 중심 연동 문서
+- 낮은 추론량 연결·행동·검증 Skill
+- 통합 Tool Manifest 정적 계약 테스트
+- 연결·진단·게임 행동 PlayMode 왕복 테스트
+- 중복 Unity Bridge·진단 Provider·게임 플레이 샘플 폴더 제거
+
 ## 0.3.0 — 2026-09-04
 
 - Added provider-neutral JSON-RPC subprocess, session-descriptor, and append-only audit-stream primitives.

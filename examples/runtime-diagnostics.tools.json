@@ -1,0 +1,62 @@
+{
+  "serverName": "game-runtime-diagnostics",
+  "serverVersion": "0.1.0",
+  "tools": [
+    {
+      "name": "runtime_status",
+      "description": "Read the connected runtime status and process identity.",
+      "command": "runtime.status",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "runtime_build_info",
+      "description": "Read build identity for the connected runtime before validating current behavior.",
+      "command": "runtime.build_info",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "runtime_logs_read",
+      "description": "Read a bounded incremental slice of runtime logs.",
+      "command": "runtime.logs.read",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sinceSequence": { "type": "integer", "minimum": 0 },
+          "level": { "type": "string" },
+          "contains": { "type": "string" },
+          "limit": { "type": "integer", "minimum": 1, "maximum": 200 },
+          "includeStackTrace": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "runtime_metrics_snapshot",
+      "description": "Read one bounded runtime performance metrics snapshot.",
+      "command": "runtime.metrics.snapshot",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "runtime_capture_screenshot",
+      "description": "Capture one runtime screenshot to an adapter-controlled diagnostics location.",
+      "command": "runtime.capture_screenshot",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  ]
+}
