@@ -1,102 +1,338 @@
-# Unity C# 런타임 어댑터 샘플
+# Unity 런타임 MCP 통합 샘플
 
 [English guide](README.md)
 
-이 샘플은 GameRuntimeMcpHost 연결 중 게임이 소유하는 절반입니다. 토큰 인증 숫자형 루프백 endpoint를 열고, 리스너 스레드에서 받은 요청을 큐에 넣은 뒤 Unity 메인 스레드에서 처리합니다.
+실행 중인 Unity Player와 `GameRuntimeMcpHost`를 연결하고, 범용 진단과 게임 플레이 명령을 하나의 Bridge에서 제공하는 복사형 샘플.
 
-## 요구사항
+원본 설계의 핵심 구조 유지: LLM Client → Python Host → 로컬 HTTP RPC → Unity 메인 스레드 → 게임 로직.
 
-- Unity 2022.3 LTS 이상
-- `HttpListener`를 지원하는 데스크톱 타깃. WebGL 제외
-- GameRuntimeMcpHost 실행용 Python 3.10 이상
+## 전체 구조
 
-Unity와 .NET API만 사용합니다. 별도 JSON 패키지나 Unity CLI는 필요하지 않습니다.
-
-## 설정
-
-1. [`Runtime`](Runtime)을 Unity 프로젝트의 `Assets/GameRuntimeMcpHostSample/Runtime`으로 복사합니다.
-2. 부트 씬 또는 부트 프리팹의 명시적인 `RuntimeServices` 오브젝트에 `UnityRuntimeMcpSampleBridge`를 추가합니다.
-3. 범용 런타임 진단이 필요하면 같은 오브젝트에 `UnityRuntimeDiagnosticsProvider`를 추가합니다.
-4. Play Mode에 진입하거나 빌드한 Player를 실행합니다.
-5. 생성된 세션 기술자와 샘플 매니페스트로 호스트를 실행합니다.
-
-```powershell
-game-runtime-mcp-host `
-  --session-file "C:\path\to\LocalLow\Company\Product\unity-runtime-mcp-sample.json" `
-  --tools-file "C:\path\to\GameRuntimeMcpHost\examples\unity\unity-runtime-sample.tools.json"
+```text
+MCP Client
+  -> stdio JSON-RPC
+  -> GameRuntimeMcpHost
+  -> HTTP POST 127.0.0.1:{port}/rpc + Session Token
+  -> GameRuntimeMcpBridge
+     ├─ 시스템 명령과 범용 진단
+     └─ 등록된 게임 명령
+          -> SampleGameRuntimeHandler
 ```
 
-브리지가 시작되면 Unity 로그에 정확한 세션 경로가 표시됩니다. 컴포넌트가 정지하면 해당 기술자를 삭제합니다.
+## 파일 구성
 
-`LocalLow` 자동 탐색은 세션 파일명과 Unity 제품명을 사용합니다.
-
-```powershell
-game-runtime-mcp-host `
-  --session-name unity-runtime-mcp-sample.json `
-  --session-product YourUnityProductName `
-  --tools-file "C:\path\to\GameRuntimeMcpHost\examples\unity\unity-runtime-sample.tools.json"
+```text
+examples/unity/
+├─ README.ko.md
+├─ README.md
+├─ game-runtime.tools.json
+│
+├─ Runtime/
+│  ├─ GameRuntimeMcpBridge.cs
+│  ├─ SampleGameRuntimeHandler.cs
+│  ├─ SampleRuntimeMcpInteractable.cs
+│  └─ lLCroweTool.GameRuntimeMcpHost.UnitySample.asmdef
+│
+└─ Tests/
+   ├─ GameRuntimeMcpTests.cs
+   └─ lLCroweTool.GameRuntimeMcpHost.UnitySample.Tests.asmdef
 ```
 
-## 샘플이 노출하는 도구
+### 역할
 
-| MCP 도구 | 용도 | Provider 필요 |
+| 파일 | 역할 |
+|---|---|
+| `GameRuntimeMcpBridge.cs` | 세션·토큰·Loopback Listener·메인 스레드 큐·명령 Registry·범용 진단 |
+| `SampleGameRuntimeHandler.cs` | 게임 상태·주변 조회·이동·상호작용·채팅 |
+| `SampleRuntimeMcpInteractable.cs` | Inspector에서 바로 붙이는 최소 상호작용 샘플 |
+| `game-runtime.tools.json` | MCP Tool 이름·입력 Schema·Unity RPC 명령 매핑 |
+| `GameRuntimeMcpTests.cs` | 연결·진단·게임 행동 PlayMode 왕복 검증 |
+
+`SampleRuntimeMcpInteractable`만 별도 파일 유지. Unity Inspector에서 붙일 수 있는 `MonoBehaviour`는 파일 이름과 클래스 이름 일치가 필요한 구조이기 때문.
+
+## Scene 구성
+
+```text
+Boot Scene
+├─ RuntimeServices
+│  └─ GameRuntimeMcpBridge
+│
+├─ ControlledEntity
+│  └─ SampleGameRuntimeHandler
+│
+└─ Interactable
+   ├─ Collider
+   └─ SampleRuntimeMcpInteractable
+```
+
+### Bridge Inspector
+
+```text
+런타임 MCP
+├─ Runtime MCP Enabled
+├─ Persist Across Scenes
+├─ Session Product Name
+├─ Session File Name
+├─ Preferred Port
+├─ Port Search Count
+└─ RPC Path
+
+요청 제한
+├─ Max Request Bytes
+├─ Request Timeout Seconds
+└─ Max Requests Per Frame
+
+범용 진단
+├─ Enable Diagnostics
+├─ Log Capacity
+├─ Message / Stack Trace 제한
+├─ Diagnostics Folder Name
+└─ Source Revision
+```
+
+## 제공 Tool
+
+### 시스템·진단
+
+| MCP Tool | Unity RPC | 역할 |
 |---|---|---|
-| `runtime_status` | 런타임/프로세스 생존 확인 | 아니요 |
-| `runtime_build_info` | 빌드 및 프로세스 식별 | `UnityRuntimeDiagnosticsProvider` |
-| `runtime_logs_read` | 제한된 증분 Unity 로그 | `UnityRuntimeDiagnosticsProvider` |
-| `runtime_metrics_snapshot` | 단일 프레임·메모리 스냅샷 | `UnityRuntimeDiagnosticsProvider` |
-| `runtime_capture_screenshot` | `persistentDataPath` 아래에 스크린샷 예약 | `UnityRuntimeDiagnosticsProvider` |
-| `echo_message` | 메인 스레드 전송 왕복 확인 | 아니요 |
+| `runtime_status` | `runtime.status` | Player·프로세스·씬·Pause 상태 |
+| `runtime_build_info` | `runtime.build_info` | 제품·버전·Build GUID·Platform·Backend |
+| `runtime_logs_read` | `runtime.logs.read` | Sequence Cursor 기반 제한형 로그 |
+| `runtime_metrics_snapshot` | `runtime.metrics.snapshot` | 현재 프레임·메모리 스냅샷 |
+| `runtime_capture_screenshot` | `runtime.capture_screenshot` | 관리 경로의 화면 캡처 예약 |
 
-범용 진단 계약과 로그 cursor 규칙은 [`RUNTIME_DIAGNOSTICS.md`](RUNTIME_DIAGNOSTICS.md)에 있습니다.
+### 게임 플레이
 
-## 씬 배치와 수명
+| MCP Tool | Unity RPC | 역할 |
+|---|---|---|
+| `get_game_state` | `game.get_state` | 위치·체력·목표·이동·최근 행동 |
+| `get_surroundings` | `game.get_surroundings` | 주변 객체와 상호작용 대상 |
+| `player_move_to` | `player.move_to` | 제한 거리 안의 X/Z 이동 |
+| `player_interact` | `player.interact` | `targetId` 우선 상호작용 |
+| `send_in_game_chat` | `chat.send` | 게임 소유 채팅 이벤트 전달 |
 
-- 배치: `Boot Scene / RuntimeServices` 또는 동등한 부트 프리팹
-- 관측: 컴포넌트, 포트 범위, 요청 제한, 타임아웃, 세션 파일명, 로그 용량, 출력 폴더가 Inspector에 보입니다.
-- 수명: `OnEnable`에서 시작/구독하고 `OnDisable`에서 중지/해제합니다. 숨은 `RuntimeInitializeOnLoadMethod` 부트스트랩은 없습니다.
-- 씬 전환 생존이 필요하면 기존 부트·영속화 시스템이 명시적으로 책임집니다.
+첨부안의 다섯 게임 Tool 유지.
 
-## 게임 로직 도구 확장
+## 설치
 
-1. 게임 소유 매니페스트에 도구와 JSON Schema를 추가합니다.
-2. 런타임 어댑터에 타입이 있는 payload DTO를 추가합니다.
-3. RPC dispatch route를 추가합니다.
-4. 권위 상태를 바꾸기 전에 합법 행동과 revision을 검증합니다.
-5. 재시도 민감 mutation에는 안정적인 action/result 식별자를 반환합니다.
-6. PlayMode 왕복 테스트를 추가합니다.
+1. `examples/unity/Runtime`을 Unity 프로젝트의 `Assets/GameRuntimeMcp/Runtime`으로 복사
+2. 선택적으로 `examples/unity/Tests` 복사
+3. `RuntimeServices`에 `GameRuntimeMcpBridge` 추가
+4. 제어 대상에 `SampleGameRuntimeHandler` 추가
+5. `Controlled Entity` 연결
+6. 상호작용 대상에 Collider와 `SampleRuntimeMcpInteractable` 추가
+7. Host 설치
 
-범용 진단은 게임별 명령을 대체하지 않습니다. 게임 플레이 권한, 합법 행동 판정, 멱등성, 타임아웃 복구는 게임 어댑터가 소유합니다.
+```powershell
+python -m pip install -e .
+```
 
-## 보안 경계
+## Host 실행
 
-- 숫자형 루프백 `127.0.0.1`에만 bind합니다.
-- 브리지 시작마다 로그에 남기지 않는 새 토큰을 생성합니다.
-- 요청 body, 메인 스레드 대기 시간, 프레임당 처리량을 제한합니다.
-- Unity API는 메인 스레드 dispatch에서만 호출합니다.
-- 로그 메시지, stack trace, 결과 컬렉션 크기를 제한합니다.
-- 스크린샷은 `Application.persistentDataPath` 아래의 어댑터 소유 폴더에만 기록합니다.
-- 임의 C# 실행, 파일 탐색, 원격 bind, Provider SDK 접근을 제공하지 않습니다.
-- 활성 토큰이 든 세션 기술자를 커밋·업로드·로그 출력하지 않습니다.
+```powershell
+game-runtime-mcp-host `
+  --session-name game-runtime-mcp-session.json `
+  --session-product UnityGameRuntime `
+  --tools-file C:\path\to\GameRuntimeMcpHost\examples\unity\game-runtime.tools.json
+```
 
-런타임 AI 제어가 제품 기능이 아니라면 출시 빌드에서 이 컴포넌트를 비활성화하거나 제외합니다.
+Unity Play Mode 또는 Desktop Player 시작 시 `Application.persistentDataPath`에 세션 기술자 생성. Host를 먼저 실행한 경우 다음 Tool 호출에서 최신 세션 자동 탐색.
 
-## 자동 샘플 테스트
+## Codex MCP 등록
 
-Unity Test Framework가 설치된 프로젝트에 `Runtime`과 `Tests`를 복사한 뒤 PlayMode 테스트 `UnityRuntimeMcpSampleBridgeTests`를 실행합니다.
+```powershell
+codex mcp add unity_game_runtime `
+  --env PYTHONIOENCODING=utf-8 `
+  --env PYTHONUTF8=1 `
+  -- python -X utf8 C:\path\to\GameRuntimeMcpHost\src\game_runtime_mcp_host.py `
+  --session-name game-runtime-mcp-session.json `
+  --session-product UnityGameRuntime `
+  --tools-file C:\path\to\GameRuntimeMcpHost\examples\unity\game-runtime.tools.json
+```
+
+MCP 등록 변경 뒤 새 Codex 세션.
+
+## Skill 설치
+
+```powershell
+& "C:\path\to\GameRuntimeMcpHost\skills\install-codex.ps1" `
+  -TargetProject "C:\path\to\YourUnityProject"
+```
+
+설치 위치:
+
+```text
+<YourUnityProject>/.agents/skills/game-runtime-mcp-host/
+```
+
+## 게임 명령 추가
+
+기능군 Handler 하나에 관련 명령 묶음 배치.
+
+```csharp
+private GameRuntimeMcpBridge.CommandBinding[] bindingList;
+
+private void Awake()
+{
+    bindingList = new[]
+    {
+        GameRuntimeMcpBridge.Bind(
+            "inventory.get_state",
+            HandleGetInventory),
+        GameRuntimeMcpBridge.Bind(
+            "inventory.use_item",
+            HandleUseItem)
+    };
+}
+
+private void TryRegister()
+{
+    bridge.RegisterAll(
+        this,
+        out string error,
+        bindingList);
+}
+
+private void OnDisable()
+{
+    bridge.UnregisterAll(this);
+}
+```
+
+결과 생성:
+
+```csharp
+return GameRuntimeMcpBridge.RuntimeCommandResult.Ok(
+    new InventoryResult
+    {
+        // 필요한 필드만 반환
+    });
+```
+
+실패:
+
+```csharp
+return GameRuntimeMcpBridge.RuntimeCommandResult.Fail(
+    "inventory_unavailable",
+    "인벤토리를 사용할 수 없습니다.");
+```
+
+### Handler 분리 기준
+
+| 상황 | 구성 |
+|---|---|
+| 명령 5~10개, 의존성·수명주기 동일 | 한 Handler 유지 |
+| Inventory·Combat 등 서비스와 활성 시점 분리 | 기능군 Handler 분리 |
+| Client·Server 권한 분리 | 권한 경계별 Handler 분리 |
+| 파일 길이만 증가 | 분리 사유 아님 |
+
+## 낮은 추론량 호출 순서
+
+```text
+runtime_status
+-> 필요 시 runtime_build_info
+-> get_game_state
+-> get_surroundings
+-> player_move_to
+-> get_game_state로 이동 완료 확인
+-> get_surroundings로 대상 갱신
+-> player_interact
+-> 게임별 권위 상태 확인
+```
+
+채팅은 별도 행동으로 `send_in_game_chat` 호출.
+
+## 로그 Cursor
+
+```text
+runtime_logs_read(sinceSequence = 0)
+-> entries 처리
+-> nextSequence 보존
+-> hasMore == true면 다음 페이지
+-> 이후 새 로그는 보존한 nextSequence부터 조회
+```
+
+- `truncated`: Ring Buffer에서 과거 항목 제거
+- `cursorReset`: 다른 프로세스·세션의 미래 Cursor 감지
+- Stack Trace: 필요한 경우에만 `includeStackTrace = true`
+
+## 보안·실행 경계
+
+- 숫자형 Loopback `127.0.0.1` 전용
+- 실행별 비공개 Session Token
+- 요청 Body·Timeout·프레임당 처리량 제한
+- 상태 변경 전 Main Thread 이동
+- 시작 전 Timeout과 실행 여부 불명 Timeout 구분
+- `Thread.Abort` 미사용
+- Runtime C# Eval 미제공
+- 원격 Bind·게임 파일 탐색 미제공
+- 호출자 임의 Screenshot 경로 미허용
+- 게임 합법 행동과 권위 상태 변경은 게임 Handler 소유
+
+## 테스트
+
+### 정적 계약 테스트
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+### Unity PlayMode
+
+```text
+GameRuntimeMcpTests.RuntimeToolsRoundTripThroughOneBridge
+```
 
 검증 범위:
 
-- 세션 기술자 생성·정리
-- 잘못된 토큰 거부
-- 인증된 런타임 상태
-- 빌드 식별
-- 필터된 증분 로그 조회
-- 메트릭 스냅샷
-- 메인 스레드 echo
+```text
+Token 인증
++ Runtime Status
++ Build Identity
++ 증분 Log
++ Metrics
++ Screenshot Queue
++ Game State
++ Surroundings
++ Move
++ Interact
++ Chat
++ Session 정리
+```
 
-스크린샷은 후속 프레임에 기록되고 테스트 러너의 그래픽 환경에 영향을 받으므로 파일 생성 완료를 테스트에서 강제하지 않습니다.
+## A/B 테스트
 
-## 설계 메모
+동일 요청을 낮은 추론량과 높은 추론량에서 실행한 뒤 다음 항목 비교.
 
-MCP 프로토콜은 Python sidecar에 남겨 게임 빌드가 MCP revision을 추적하지 않게 했습니다. Unity 어댑터는 작은 localhost RPC 계약과 게임 권한만 소유합니다. 선택형 진단 Provider는 기존 listener/session/token을 재사용하며 두 번째 호스트나 전송 계층을 만들지 않습니다.
+```text
+Tool 선택 정확도
+호출 수
+잘못된 Tool 이름 생성 여부
+상태 변경 전 조회 여부
+상태 변경 후 재검증 여부
+Timeout 뒤 비멱등 재호출 여부
+최종 상태 일치 여부
+```
+
+권장 요청:
+
+```text
+현재 게임 상태 확인
+가장 가까운 상호작용 가능 대상 탐색
+대상 근처로 이동
+이동 완료 확인
+대상 재탐색
+상호작용
+결과 확인
+```
+
+## 샘플 한계
+
+- 3D `Physics.OverlapSphere`
+- 직접 `Transform` 이동
+- Inspector 기반 샘플 체력·목표
+- 샘플 상호작용 Component
+- Save·Inventory·Combat·Quest 규칙 미포함
+
+상용 적용 시 프로젝트의 이동·상호작용·채팅·게임 상태 서비스로 Handler 내부 구현 교체.

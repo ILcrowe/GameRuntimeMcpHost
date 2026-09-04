@@ -1,30 +1,211 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.Profiling;
 using UnityEngine.SceneManagement;
 
-namespace GameRuntimeMcp
+namespace lLCroweTool.GameRuntimeMcpHost
 {
     /// <summary>
     /// GameRuntimeMcpHost와 실행 중인 Unity Player를 연결하는 로컬 RPC 브리지입니다.
-    /// MCP는 Python Host가 담당하고, 이 컴포넌트는 세션·인증·메인 스레드 디스패치만 담당합니다.
+    /// 세션·인증·메인 스레드 디스패치·명령 등록·범용 진단을 한 컴포넌트에서 관리합니다.
     /// </summary>
     [DefaultExecutionOrder(-1000)]
     [DisallowMultipleComponent]
     public sealed class GameRuntimeMcpBridge : MonoBehaviour
     {
-        public delegate object RuntimeCommandHandler(string requestJson);
+        /// <summary>
+        /// 등록된 런타임 명령을 Unity 메인 스레드에서 실행하는 대리자입니다.
+        /// </summary>
+        public delegate RuntimeCommandResult RuntimeCommandHandler(string requestJson);
+
+        /// <summary>
+        /// 런타임 명령의 성공 데이터 또는 실패 정보를 보관합니다.
+        /// </summary>
+        public sealed class RuntimeCommandResult
+        {
+            /// <summary>
+            /// 명령 성공 여부입니다.
+            /// </summary>
+            public bool Success;
+
+            /// <summary>
+            /// 성공·실패를 식별하는 짧은 코드입니다.
+            /// </summary>
+            public string Code;
+
+            /// <summary>
+            /// 호출자가 확인할 수 있는 설명입니다.
+            /// </summary>
+            public string Message;
+
+            internal string DataJson;
+
+            /// <summary>
+            /// 데이터가 없는 성공 결과를 만듭니다.
+            /// </summary>
+            public static RuntimeCommandResult Ok()
+            {
+                return Ok(null);
+            }
+
+            /// <summary>
+            /// 지정한 데이터를 포함하는 성공 결과를 만듭니다.
+            /// </summary>
+            public static RuntimeCommandResult Ok(object data)
+            {
+                return new RuntimeCommandResult
+                {
+                    Success = true,
+                    Code = "OK",
+                    Message = string.Empty,
+                    DataJson = SerializeJsonValue(data)
+                };
+            }
+
+            /// <summary>
+            /// 지정한 코드와 설명을 포함하는 실패 결과를 만듭니다.
+            /// </summary>
+            public static RuntimeCommandResult Fail(string code, string message)
+            {
+                return new RuntimeCommandResult
+                {
+                    Success = false,
+                    Code = string.IsNullOrWhiteSpace(code)
+                        ? "COMMAND_FAILED"
+                        : code,
+                    Message = message ?? string.Empty,
+                    DataJson = "null"
+                };
+            }
+        }
+
+        /// <summary>
+        /// 명령 이름과 실행 대리자를 한 쌍으로 묶습니다.
+        /// </summary>
+        public readonly struct CommandBinding
+        {
+            /// <summary>
+            /// Unity 런타임 내부 RPC 명령 이름입니다.
+            /// </summary>
+            public readonly string Command;
+
+            /// <summary>
+            /// 명령 실행 대리자입니다.
+            /// </summary>
+            public readonly RuntimeCommandHandler Handler;
+
+            /// <summary>
+            /// 명령 바인딩을 만듭니다.
+            /// </summary>
+            public CommandBinding(string command, RuntimeCommandHandler handler)
+            {
+                Command = command;
+                Handler = handler;
+            }
+        }
+
+        /// <summary>
+        /// 연결된 Player의 현재 상태입니다.
+        /// </summary>
+        [Serializable]
+        public sealed class RuntimeStatusResult
+        {
+            public string product;
+            public string unityVersion;
+            public int processId;
+            public int frameCount;
+            public string sceneName;
+            public bool isPaused;
+            public bool developmentBuild;
+        }
+
+        /// <summary>
+        /// 현재 실행 중인 빌드를 식별하는 정보입니다.
+        /// </summary>
+        [Serializable]
+        public sealed class BuildInfoResult
+        {
+            public string product;
+            public string version;
+            public string unityVersion;
+            public string buildId;
+            public bool developmentBuild;
+            public string platform;
+            public string scriptingBackend;
+            public string sourceRevision;
+            public int processId;
+        }
+
+        /// <summary>
+        /// 런타임 로그 한 건입니다.
+        /// </summary>
+        [Serializable]
+        public sealed class LogEntryResult
+        {
+            public long sequence;
+            public string timestampUtc;
+            public string level;
+            public string message;
+            public string stackTrace;
+        }
+
+        /// <summary>
+        /// 제한된 증분 로그 조회 결과입니다.
+        /// </summary>
+        [Serializable]
+        public sealed class LogReadResult
+        {
+            public LogEntryResult[] entries;
+            public long oldestSequence;
+            public long newestSequence;
+            public long nextSequence;
+            public bool truncated;
+            public bool hasMore;
+            public bool cursorReset;
+        }
+
+        /// <summary>
+        /// 현재 프레임과 메모리의 단일 성능 스냅샷입니다.
+        /// </summary>
+        [Serializable]
+        public sealed class MetricsSnapshotResult
+        {
+            public int frameCount;
+            public float unscaledDeltaTimeMs;
+            public float smoothDeltaTimeMs;
+            public float approximateFps;
+            public long managedMemoryBytes;
+            public long totalAllocatedMemoryBytes;
+            public long totalReservedMemoryBytes;
+            public long monoHeapBytes;
+            public long monoUsedBytes;
+            public int systemMemoryMb;
+            public int graphicsMemoryMb;
+        }
+
+        /// <summary>
+        /// 화면 캡처 요청 결과입니다.
+        /// </summary>
+        [Serializable]
+        public sealed class ScreenshotResult
+        {
+            public bool queued;
+            public string path;
+            public int frameCount;
+        }
 
         [Serializable]
         private sealed class SessionDescriptor
         {
-            public int protocolVersion = 1;
+            public int protocolVersion = ProtocolVersion;
             public string endpoint;
             public string token;
             public string tokenHeader = TokenHeader;
@@ -41,24 +222,45 @@ namespace GameRuntimeMcp
         }
 
         [Serializable]
-        public sealed class RuntimeStatusResult
+        private sealed class DiagnosticsRequest
         {
-            public string product;
-            public string unityVersion;
-            public int processId;
-            public int frameCount;
-            public string sceneName;
-            public bool isPaused;
+            public DiagnosticsPayload payload;
+        }
+
+        [Serializable]
+        private sealed class DiagnosticsPayload
+        {
+            public long sinceSequence;
+            public string level;
+            public string contains;
+            public int limit;
+            public bool includeStackTrace;
+        }
+
+        private sealed class RegisteredCommand
+        {
+            public UnityEngine.Object Owner;
+            public RuntimeCommandHandler Handler;
+        }
+
+        private sealed class LogRecord
+        {
+            public long Sequence;
+            public string TimestampUtc;
+            public string Level;
+            public string Message;
+            public string StackTrace;
         }
 
         private sealed class PendingRequest
         {
-            public string json;
-            public readonly TaskCompletionSource<HttpReply> completion =
+            public string RequestJson;
+
+            public readonly TaskCompletionSource<HttpReply> Completion =
                 new TaskCompletionSource<HttpReply>(
                     TaskCreationOptions.RunContinuationsAsynchronously);
 
-            // 0 queued, 1 dispatching, 2 abandoned, 3 completed
+            // 0: 대기, 1: 실행 중, 2: 시작 전 취소, 3: 완료
             private int state;
 
             public bool TryBegin()
@@ -73,51 +275,77 @@ namespace GameRuntimeMcp
 
             public void Complete(HttpReply reply)
             {
-                completion.TrySetResult(reply);
+                Completion.TrySetResult(reply);
                 Volatile.Write(ref state, 3);
             }
         }
 
         private readonly struct HttpReply
         {
-            public readonly int statusCode;
-            public readonly string body;
+            public readonly int StatusCode;
+            public readonly string Body;
 
             public HttpReply(int statusCode, string body)
             {
-                this.statusCode = statusCode;
-                this.body = body;
+                StatusCode = statusCode;
+                Body = body;
             }
         }
 
         private const int ProtocolVersion = 1;
         private const int DefaultPort = 18765;
-        private const string DefaultSessionFile = "game-runtime-mcp-session.json";
+        private const int MaximumLogCapacity = 4096;
+        private const int MaximumLogReadCount = 200;
+        private const int DefaultLogReadCount = 50;
+
+        private const string DefaultSessionFileName = "game-runtime-mcp-session.json";
         private const string DefaultRpcPath = "/rpc";
         private const string TokenHeader = "X-Game-Runtime-Token";
-        private const string RuntimeStatusCommand = "runtime.status";
 
+        private const string RuntimeStatusCommand = "runtime.status";
+        private const string RuntimeBuildInfoCommand = "runtime.build_info";
+        private const string RuntimeLogsReadCommand = "runtime.logs.read";
+        private const string RuntimeMetricsSnapshotCommand = "runtime.metrics.snapshot";
+        private const string RuntimeCaptureScreenshotCommand = "runtime.capture_screenshot";
+
+        /// <summary>
+        /// 현재 활성화된 런타임 브리지입니다.
+        /// </summary>
         public static GameRuntimeMcpBridge Instance { get; private set; }
 
-        [Header("Session")]
+        [Header("런타임 MCP")]
         [SerializeField] private bool runtimeMcpEnabled = true;
+        [SerializeField] private bool persistAcrossScenes = true;
         [SerializeField] private string sessionProductName = "UnityGameRuntime";
-        [SerializeField] private string sessionFileName = DefaultSessionFile;
+        [SerializeField] private string sessionFileName = DefaultSessionFileName;
         [SerializeField, Min(1)] private int preferredPort = DefaultPort;
         [SerializeField, Min(1)] private int portSearchCount = 10;
         [SerializeField] private string rpcPath = DefaultRpcPath;
 
-        [Header("Limits")]
+        [Header("요청 제한")]
         [SerializeField, Min(1024)] private int maxRequestBytes = 65536;
         [SerializeField, Min(1)] private int requestTimeoutSeconds = 10;
         [SerializeField, Min(1)] private int maxRequestsPerFrame = 8;
 
-        private readonly ConcurrentQueue<PendingRequest> requests =
+        [Header("범용 진단")]
+        [SerializeField] private bool enableDiagnostics = true;
+        [SerializeField, Min(16)] private int logCapacity = 512;
+        [SerializeField, Min(128)] private int maxLogMessageCharacters = 2048;
+        [SerializeField, Min(128)] private int maxStackTraceCharacters = 4096;
+        [SerializeField] private string diagnosticsFolderName = "GameRuntimeMcpDiagnostics";
+        [SerializeField] private string sourceRevision = string.Empty;
+
+        private readonly ConcurrentQueue<PendingRequest> requestQueue =
             new ConcurrentQueue<PendingRequest>();
-        private readonly ConcurrentQueue<string> warnings =
+
+        private readonly ConcurrentQueue<string> warningQueue =
             new ConcurrentQueue<string>();
-        private readonly Dictionary<string, RuntimeCommandHandler> handlers =
-            new Dictionary<string, RuntimeCommandHandler>(StringComparer.Ordinal);
+
+        private readonly Dictionary<string, RegisteredCommand> commandMap =
+            new Dictionary<string, RegisteredCommand>(StringComparer.Ordinal);
+
+        private readonly object logGate = new object();
+        private readonly Queue<LogRecord> logQueue = new Queue<LogRecord>();
 
         private HttpListener listener;
         private Thread listenerThread;
@@ -127,47 +355,103 @@ namespace GameRuntimeMcp
         private bool started;
         private bool unityStartInvoked;
         private bool previousRunInBackground;
+        private bool logSubscribed;
         private int activePort;
         private int mainThreadId;
+        private long latestLogSequence;
 
-        public bool IsListenerRunning => listener != null && listener.IsListening;
+        /// <summary>
+        /// 로컬 HTTP Listener가 실행 중인지 여부입니다.
+        /// </summary>
+        public bool IsListenerRunning =>
+            listener != null &&
+            listener.IsListening;
+
+        /// <summary>
+        /// 현재 선택된 로컬 포트입니다.
+        /// </summary>
         public int ActivePort => activePort;
+
+        /// <summary>
+        /// 현재 세션 기술자 파일 경로입니다.
+        /// </summary>
         public string SessionPath => sessionPath;
 
+        /// <summary>
+        /// 세션 자동 탐색에 사용하는 제품 이름입니다.
+        /// </summary>
         public string SessionProductName
         {
             get => sessionProductName;
             set => sessionProductName = value;
         }
 
+        /// <summary>
+        /// Application.persistentDataPath에 기록할 세션 파일 이름입니다.
+        /// </summary>
         public string SessionFileName
         {
             get => sessionFileName;
             set => sessionFileName = value;
         }
 
+        /// <summary>
+        /// Listener가 우선 시도할 포트입니다.
+        /// </summary>
         public int PreferredPort
         {
             get => preferredPort;
             set => preferredPort = value;
         }
 
+        /// <summary>
+        /// 범용 진단 명령 활성화 여부입니다.
+        /// </summary>
+        public bool EnableDiagnostics
+        {
+            get => enableDiagnostics;
+            set
+            {
+                enableDiagnostics = value;
+
+                if (!Application.isPlaying || !started)
+                {
+                    return;
+                }
+
+                if (enableDiagnostics)
+                {
+                    SubscribeLogs();
+                }
+                else
+                {
+                    UnsubscribeLogs();
+                }
+            }
+        }
+
         private void Awake()
         {
             if (Instance != null && Instance != this)
             {
-                Destroy(gameObject);
+                Destroy(this);
                 return;
             }
 
             Instance = this;
             mainThreadId = Thread.CurrentThread.ManagedThreadId;
-            DontDestroyOnLoad(gameObject);
+
+            if (persistAcrossScenes)
+            {
+                DontDestroyOnLoad(gameObject);
+            }
         }
 
         private void OnEnable()
         {
-            if (unityStartInvoked && Application.isPlaying && runtimeMcpEnabled)
+            if (unityStartInvoked &&
+                Application.isPlaying &&
+                runtimeMcpEnabled)
             {
                 StartBridge();
             }
@@ -176,6 +460,7 @@ namespace GameRuntimeMcp
         private void Start()
         {
             unityStartInvoked = true;
+
             if (runtimeMcpEnabled)
             {
                 StartBridge();
@@ -184,13 +469,14 @@ namespace GameRuntimeMcp
 
         private void Update()
         {
-            while (warnings.TryDequeue(out string warning))
+            while (warningQueue.TryDequeue(out string warning))
             {
                 Debug.LogWarning($"[GameRuntimeMcpBridge] {warning}", this);
             }
 
-            int budget = Mathf.Max(1, maxRequestsPerFrame);
-            while (budget-- > 0 && requests.TryDequeue(out PendingRequest pending))
+            int requestBudget = Mathf.Max(1, maxRequestsPerFrame);
+            while (requestBudget-- > 0 &&
+                   requestQueue.TryDequeue(out PendingRequest pending))
             {
                 if (!pending.TryBegin())
                 {
@@ -200,11 +486,14 @@ namespace GameRuntimeMcp
                 HttpReply reply;
                 try
                 {
-                    reply = Dispatch(pending.json);
+                    reply = Dispatch(pending.RequestJson);
                 }
                 catch (Exception exception)
                 {
-                    reply = ErrorReply(200, "dispatch_failed", exception.Message);
+                    reply = ErrorReply(
+                        200,
+                        "dispatch_failed",
+                        exception.Message);
                 }
 
                 pending.Complete(reply);
@@ -221,11 +510,14 @@ namespace GameRuntimeMcp
 
         private void OnDestroy()
         {
-            if (Instance == this)
+            if (Instance != this)
             {
-                StopBridge();
-                Instance = null;
+                return;
             }
+
+            StopBridge();
+            commandMap.Clear();
+            Instance = null;
         }
 
         private void OnApplicationQuit()
@@ -233,66 +525,143 @@ namespace GameRuntimeMcp
             StopBridge();
         }
 
-        public bool RegisterHandler(
+        /// <summary>
+        /// 명령 이름과 실행 대리자를 바인딩합니다.
+        /// </summary>
+        public static CommandBinding Bind(
             string command,
-            RuntimeCommandHandler handler,
-            out string error)
+            RuntimeCommandHandler handler)
+        {
+            return new CommandBinding(command, handler);
+        }
+
+        /// <summary>
+        /// 한 소유자의 명령 묶음을 검증한 뒤 원자적으로 등록합니다.
+        /// </summary>
+        public bool RegisterAll(
+            UnityEngine.Object owner,
+            out string error,
+            params CommandBinding[] bindingList)
         {
             error = string.Empty;
 
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                error = "핸들러 등록은 Unity 메인 스레드에서 수행해야 합니다.";
+                error = "명령 등록은 Unity 메인 스레드에서만 가능합니다.";
                 return false;
             }
 
-            string key = command?.Trim() ?? string.Empty;
-            if (string.IsNullOrEmpty(key) || handler == null)
+            if (owner == null)
             {
-                error = "명령 이름과 핸들러가 필요합니다.";
+                error = "명령 소유자가 필요합니다.";
                 return false;
             }
 
-            if (key == RuntimeStatusCommand)
+            if (bindingList == null || bindingList.Length == 0)
             {
-                error = $"{RuntimeStatusCommand}은 브리지 기본 명령입니다.";
+                error = "등록할 명령이 없습니다.";
                 return false;
             }
 
-            if (handlers.TryGetValue(key, out RuntimeCommandHandler existing))
+            var normalizedList = new CommandBinding[bindingList.Length];
+            var nameSet = new HashSet<string>(StringComparer.Ordinal);
+
+            for (int index = 0; index < bindingList.Length; index++)
             {
-                if (existing == handler)
+                CommandBinding binding = bindingList[index];
+                string command = binding.Command?.Trim() ?? string.Empty;
+
+                if (string.IsNullOrEmpty(command))
                 {
-                    return true;
+                    error = $"[{index}] 명령 이름이 비어 있습니다.";
+                    return false;
                 }
 
-                error = $"명령 '{key}'은 이미 등록되어 있습니다.";
-                return false;
+                if (binding.Handler == null)
+                {
+                    error = $"명령 '{command}'의 실행 대리자가 없습니다.";
+                    return false;
+                }
+
+                if (IsSystemCommand(command))
+                {
+                    error = $"명령 '{command}'은 브리지 기본 명령입니다.";
+                    return false;
+                }
+
+                if (!nameSet.Add(command))
+                {
+                    error = $"등록 요청 안에 명령 '{command}'이 중복되어 있습니다.";
+                    return false;
+                }
+
+                if (commandMap.TryGetValue(
+                        command,
+                        out RegisteredCommand existing) &&
+                    (existing.Owner != owner ||
+                     existing.Handler != binding.Handler))
+                {
+                    error = $"명령 '{command}'은 이미 다른 소유자가 등록했습니다.";
+                    return false;
+                }
+
+                normalizedList[index] =
+                    new CommandBinding(command, binding.Handler);
             }
 
-            handlers.Add(key, handler);
+            for (int index = 0; index < normalizedList.Length; index++)
+            {
+                CommandBinding binding = normalizedList[index];
+
+                if (commandMap.ContainsKey(binding.Command))
+                {
+                    continue;
+                }
+
+                commandMap.Add(
+                    binding.Command,
+                    new RegisteredCommand
+                    {
+                        Owner = owner,
+                        Handler = binding.Handler
+                    });
+            }
+
             return true;
         }
 
-        public bool UnregisterHandler(
-            string command,
-            RuntimeCommandHandler handler)
+        /// <summary>
+        /// 지정한 소유자가 등록한 모든 명령을 제거합니다.
+        /// </summary>
+        public int UnregisterAll(UnityEngine.Object owner)
         {
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
+            if (Thread.CurrentThread.ManagedThreadId != mainThreadId ||
+                owner == null)
             {
-                return false;
+                return 0;
             }
 
-            string key = command?.Trim() ?? string.Empty;
-            if (!handlers.TryGetValue(key, out RuntimeCommandHandler existing) ||
-                existing != handler)
+            var removeList = new List<string>();
+
+            foreach (KeyValuePair<string, RegisteredCommand> pair in commandMap)
             {
-                return false;
+                if (pair.Value.Owner == owner)
+                {
+                    removeList.Add(pair.Key);
+                }
             }
 
-            return handlers.Remove(key);
+            for (int index = 0; index < removeList.Count; index++)
+            {
+                commandMap.Remove(removeList[index]);
+            }
+
+            return removeList.Count;
         }
 
+        /// <summary>
+        /// Listener를 시작하고 새 세션 기술자를 게시합니다.
+        /// </summary>
         public bool StartBridge()
         {
             if (started)
@@ -311,10 +680,15 @@ namespace GameRuntimeMcp
             stopping = false;
             started = true;
 
+            ResetLogBuffer();
+            SubscribeLogs();
+
             if (!TryStartListener(out string endpoint, out string failure))
             {
                 StopBridge();
-                Debug.LogWarning($"[GameRuntimeMcpBridge] {failure}", this);
+                Debug.LogWarning(
+                    $"[GameRuntimeMcpBridge] {failure}",
+                    this);
                 return false;
             }
 
@@ -344,6 +718,9 @@ namespace GameRuntimeMcp
             return true;
         }
 
+        /// <summary>
+        /// Listener를 종료하고 현재 세션 기술자를 정리합니다.
+        /// </summary>
         public void StopBridge()
         {
             if (!started)
@@ -352,28 +729,35 @@ namespace GameRuntimeMcp
             }
 
             stopping = true;
+            UnsubscribeLogs();
 
             try
             {
                 listener?.Stop();
             }
-            catch
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (HttpListenerException)
             {
             }
 
-            while (requests.TryDequeue(out PendingRequest pending))
+            while (requestQueue.TryDequeue(out PendingRequest pending))
             {
-                if (pending.TryAbandon())
+                if (!pending.TryAbandon())
                 {
-                    pending.Complete(
-                        ErrorReply(
-                            503,
-                            "runtime_stopping",
-                            "Unity 런타임이 종료 중입니다."));
+                    continue;
                 }
+
+                pending.Complete(
+                    ErrorReply(
+                        503,
+                        "runtime_stopping",
+                        "Unity 런타임이 종료 중입니다."));
             }
 
-            if (listenerThread != null && listenerThread.IsAlive)
+            if (listenerThread != null &&
+                listenerThread.IsAlive)
             {
                 listenerThread.Join(500);
             }
@@ -384,7 +768,7 @@ namespace GameRuntimeMcp
             {
                 listener?.Close();
             }
-            catch
+            catch (ObjectDisposedException)
             {
             }
 
@@ -403,14 +787,16 @@ namespace GameRuntimeMcp
         {
             endpoint = string.Empty;
             failure = string.Empty;
-            Exception last = null;
+            Exception lastException = null;
 
-            int first = Mathf.Clamp(preferredPort, 1, 65535);
-            int count = Mathf.Max(1, portSearchCount);
+            int firstPort = Mathf.Clamp(preferredPort, 1, 65535);
+            int attemptCount = Mathf.Max(1, portSearchCount);
 
-            for (int offset = 0; offset < count && first + offset <= 65535; offset++)
+            for (int offset = 0;
+                 offset < attemptCount && firstPort + offset <= 65535;
+                 offset++)
             {
-                int port = first + offset;
+                int port = firstPort + offset;
                 var candidate = new HttpListener();
                 candidate.Prefixes.Add($"http://127.0.0.1:{port}/");
 
@@ -424,57 +810,75 @@ namespace GameRuntimeMcp
                 }
                 catch (Exception exception)
                 {
-                    last = exception;
+                    lastException = exception;
                     candidate.Close();
                 }
             }
 
             failure =
-                $"사용 가능한 로컬 포트를 찾지 못했습니다: {last?.Message}";
+                $"사용 가능한 로컬 포트를 찾지 못했습니다: {lastException?.Message}";
             return false;
         }
 
         private void WriteSessionDescriptor(string endpoint)
         {
-            string fileName = Path.GetFileName(sessionFileName);
-            if (string.IsNullOrWhiteSpace(fileName))
+            string safeFileName = Path.GetFileName(sessionFileName);
+            if (string.IsNullOrWhiteSpace(safeFileName))
             {
-                fileName = DefaultSessionFile;
+                safeFileName = DefaultSessionFileName;
             }
 
-            sessionPath = Path.Combine(Application.persistentDataPath, fileName);
-            string temp = sessionPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            sessionPath = Path.Combine(
+                Application.persistentDataPath,
+                safeFileName);
+
+            string temporaryPath =
+                sessionPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
 
             var descriptor = new SessionDescriptor
             {
                 endpoint = endpoint,
                 token = sessionToken,
                 rpcPath = NormalizePath(rpcPath),
-                product = string.IsNullOrWhiteSpace(sessionProductName)
-                    ? Application.productName
-                    : sessionProductName.Trim(),
-                processId = System.Diagnostics.Process.GetCurrentProcess().Id
+                product = GetSessionProductName(),
+                processId = System.Diagnostics.Process
+                    .GetCurrentProcess()
+                    .Id
             };
+
+            string json = JsonUtility.ToJson(descriptor, true);
 
             try
             {
                 File.WriteAllText(
-                    temp,
-                    JsonUtility.ToJson(descriptor, true),
+                    temporaryPath,
+                    json,
                     new UTF8Encoding(false));
 
                 if (File.Exists(sessionPath))
                 {
-                    File.Delete(sessionPath);
+                    try
+                    {
+                        File.Replace(temporaryPath, sessionPath, null);
+                        return;
+                    }
+                    catch (PlatformNotSupportedException)
+                    {
+                        File.Delete(sessionPath);
+                    }
+                    catch (IOException)
+                    {
+                        File.Delete(sessionPath);
+                    }
                 }
 
-                File.Move(temp, sessionPath);
+                File.Move(temporaryPath, sessionPath);
             }
             finally
             {
-                if (File.Exists(temp))
+                if (File.Exists(temporaryPath))
                 {
-                    File.Delete(temp);
+                    File.Delete(temporaryPath);
                 }
             }
         }
@@ -483,28 +887,39 @@ namespace GameRuntimeMcp
         {
             try
             {
-                if (!string.IsNullOrEmpty(sessionPath) && File.Exists(sessionPath))
+                if (string.IsNullOrEmpty(sessionPath) ||
+                    !File.Exists(sessionPath))
                 {
-                    SessionDescriptor descriptor =
-                        JsonUtility.FromJson<SessionDescriptor>(
-                            File.ReadAllText(sessionPath, Encoding.UTF8));
+                    return;
+                }
 
-                    if (descriptor != null && descriptor.token == sessionToken)
-                    {
-                        File.Delete(sessionPath);
-                    }
+                SessionDescriptor descriptor =
+                    JsonUtility.FromJson<SessionDescriptor>(
+                        File.ReadAllText(sessionPath, Encoding.UTF8));
+
+                if (descriptor != null &&
+                    descriptor.token == sessionToken)
+                {
+                    File.Delete(sessionPath);
                 }
             }
-            catch
+            catch (IOException)
             {
             }
-
-            sessionPath = string.Empty;
+            catch (UnauthorizedAccessException)
+            {
+            }
+            finally
+            {
+                sessionPath = string.Empty;
+            }
         }
 
         private void ListenLoop()
         {
-            while (!stopping && listener != null && listener.IsListening)
+            while (!stopping &&
+                   listener != null &&
+                   listener.IsListening)
             {
                 try
                 {
@@ -514,7 +929,8 @@ namespace GameRuntimeMcp
                 {
                     if (!stopping)
                     {
-                        warnings.Enqueue("로컬 Listener가 중단되었습니다.");
+                        warningQueue.Enqueue(
+                            "로컬 Listener가 예기치 않게 중단되었습니다.");
                     }
                 }
                 catch (ObjectDisposedException)
@@ -525,7 +941,8 @@ namespace GameRuntimeMcp
                 {
                     if (!stopping)
                     {
-                        warnings.Enqueue($"Listener 오류: {exception.Message}");
+                        warningQueue.Enqueue(
+                            $"Listener 오류: {exception.Message}");
                     }
                 }
             }
@@ -541,46 +958,71 @@ namespace GameRuntimeMcp
             {
                 WriteHttp(
                     context.Response,
-                    ErrorReply(403, "loopback_only", "로컬 요청만 허용합니다."));
+                    ErrorReply(
+                        403,
+                        "loopback_only",
+                        "로컬 요청만 허용합니다."));
                 return;
             }
 
-            if (request.HttpMethod != "POST" ||
+            if (!string.Equals(
+                    request.HttpMethod,
+                    "POST",
+                    StringComparison.OrdinalIgnoreCase) ||
                 request.Url == null ||
-                request.Url.AbsolutePath != path)
+                !string.Equals(
+                    request.Url.AbsolutePath,
+                    path,
+                    StringComparison.Ordinal))
             {
                 WriteHttp(
                     context.Response,
-                    ErrorReply(404, "not_found", $"POST {path}를 사용해야 합니다."));
+                    ErrorReply(
+                        404,
+                        "not_found",
+                        $"POST {path}를 사용해야 합니다."));
                 return;
             }
 
-            if (request.Headers[TokenHeader] != sessionToken)
+            if (!string.Equals(
+                    request.Headers[TokenHeader],
+                    sessionToken,
+                    StringComparison.Ordinal))
             {
                 WriteHttp(
                     context.Response,
-                    ErrorReply(401, "unauthorized", "세션 토큰이 올바르지 않습니다."));
+                    ErrorReply(
+                        401,
+                        "unauthorized",
+                        "세션 토큰이 올바르지 않습니다."));
                 return;
             }
 
-            if (!TryReadBody(
-                    request,
-                    Math.Max(1024, maxRequestBytes),
-                    out string json))
+            int bodyLimit = Math.Max(1024, maxRequestBytes);
+            if (!TryReadBody(request, bodyLimit, out string requestJson))
             {
                 WriteHttp(
                     context.Response,
-                    ErrorReply(413, "request_too_large", "요청 본문이 제한을 넘었습니다."));
+                    ErrorReply(
+                        413,
+                        "request_too_large",
+                        $"요청 본문이 {bodyLimit}바이트 제한을 넘었습니다."));
                 return;
             }
 
-            var pending = new PendingRequest { json = json };
-            requests.Enqueue(pending);
+            var pending = new PendingRequest
+            {
+                RequestJson = requestJson
+            };
+            requestQueue.Enqueue(pending);
 
-            if (!pending.completion.Task.Wait(
-                    TimeSpan.FromSeconds(Math.Max(1, requestTimeoutSeconds))))
+            TimeSpan timeout = TimeSpan.FromSeconds(
+                Math.Max(1, requestTimeoutSeconds));
+
+            if (!pending.Completion.Task.Wait(timeout))
             {
                 bool notStarted = pending.TryAbandon();
+
                 WriteHttp(
                     context.Response,
                     ErrorReply(
@@ -589,12 +1031,14 @@ namespace GameRuntimeMcp
                             ? "main_thread_timeout_not_started"
                             : "main_thread_timeout_unknown",
                         notStarted
-                            ? "메인 스레드가 요청을 시작하지 못했습니다."
-                            : "요청 완료 여부를 확인할 수 없습니다."));
+                            ? "메인 스레드가 요청 실행을 시작하지 못했습니다."
+                            : "요청 실행 여부를 확인할 수 없습니다."));
                 return;
             }
 
-            WriteHttp(context.Response, pending.completion.Task.Result);
+            WriteHttp(
+                context.Response,
+                pending.Completion.Task.Result);
         }
 
         private static bool TryReadBody(
@@ -603,6 +1047,7 @@ namespace GameRuntimeMcp
             out string body)
         {
             body = string.Empty;
+
             if (request.ContentLength64 > maxBytes)
             {
                 return false;
@@ -611,27 +1056,34 @@ namespace GameRuntimeMcp
             using (var memory = new MemoryStream())
             {
                 byte[] buffer = new byte[4096];
-                int total = 0;
+                int totalBytes = 0;
 
                 while (true)
                 {
-                    int read = request.InputStream.Read(buffer, 0, buffer.Length);
-                    if (read <= 0)
+                    int readBytes =
+                        request.InputStream.Read(
+                            buffer,
+                            0,
+                            buffer.Length);
+
+                    if (readBytes <= 0)
                     {
                         break;
                     }
 
-                    total += read;
-                    if (total > maxBytes)
+                    totalBytes += readBytes;
+                    if (totalBytes > maxBytes)
                     {
                         return false;
                     }
 
-                    memory.Write(buffer, 0, read);
+                    memory.Write(buffer, 0, readBytes);
                 }
 
-                body = (request.ContentEncoding ?? Encoding.UTF8)
-                    .GetString(memory.ToArray());
+                Encoding encoding =
+                    request.ContentEncoding ?? Encoding.UTF8;
+
+                body = encoding.GetString(memory.ToArray());
                 return true;
             }
         }
@@ -642,77 +1094,426 @@ namespace GameRuntimeMcp
 
             try
             {
-                request = JsonUtility.FromJson<RequestHeader>(requestJson);
+                request =
+                    JsonUtility.FromJson<RequestHeader>(requestJson);
             }
             catch (ArgumentException exception)
             {
-                return ErrorReply(200, "invalid_json", exception.Message);
+                return ErrorReply(
+                    200,
+                    "invalid_json",
+                    exception.Message);
             }
 
-            if (request == null || string.IsNullOrWhiteSpace(request.command))
+            if (request == null ||
+                string.IsNullOrWhiteSpace(request.command))
             {
-                return ErrorReply(200, "invalid_request", "command가 필요합니다.");
+                return ErrorReply(
+                    200,
+                    "invalid_request",
+                    "command가 필요합니다.");
             }
 
             if (request.protocol != ProtocolVersion)
             {
-                return ErrorReply(200, "unsupported_protocol", "지원 프로토콜은 1입니다.");
-            }
-
-            if (request.command == RuntimeStatusCommand)
-            {
-                Scene scene = SceneManager.GetActiveScene();
-                return ResultReply(
-                    new RuntimeStatusResult
-                    {
-                        product = string.IsNullOrWhiteSpace(sessionProductName)
-                            ? Application.productName
-                            : sessionProductName.Trim(),
-                        unityVersion = Application.unityVersion,
-                        processId = System.Diagnostics.Process.GetCurrentProcess().Id,
-                        frameCount = Time.frameCount,
-                        sceneName = scene.IsValid() ? scene.name : string.Empty,
-                        isPaused = Time.timeScale == 0f
-                    });
-            }
-
-            if (!handlers.TryGetValue(
-                    request.command,
-                    out RuntimeCommandHandler handler))
-            {
                 return ErrorReply(
                     200,
-                    "unknown_command",
-                    $"등록되지 않은 명령입니다: {request.command}");
+                    "unsupported_protocol",
+                    $"지원 프로토콜은 {ProtocolVersion}입니다.");
             }
 
             try
             {
-                return ResultReply(handler(requestJson));
+                switch (request.command)
+                {
+                    case RuntimeStatusCommand:
+                        return ResultReply(ReadRuntimeStatus());
+
+                    case RuntimeBuildInfoCommand:
+                        return enableDiagnostics
+                            ? ResultReply(
+                                RuntimeCommandResult.Ok(
+                                    ReadBuildInfo()))
+                            : DiagnosticsDisabledReply();
+
+                    case RuntimeLogsReadCommand:
+                        return enableDiagnostics
+                            ? ResultReply(
+                                RuntimeCommandResult.Ok(
+                                    ReadLogs(requestJson)))
+                            : DiagnosticsDisabledReply();
+
+                    case RuntimeMetricsSnapshotCommand:
+                        return enableDiagnostics
+                            ? ResultReply(
+                                RuntimeCommandResult.Ok(
+                                    ReadMetricsSnapshot()))
+                            : DiagnosticsDisabledReply();
+
+                    case RuntimeCaptureScreenshotCommand:
+                        return enableDiagnostics
+                            ? ResultReply(
+                                RuntimeCommandResult.Ok(
+                                    CaptureScreenshot()))
+                            : DiagnosticsDisabledReply();
+                }
+
+                if (!commandMap.TryGetValue(
+                        request.command,
+                        out RegisteredCommand registered))
+                {
+                    return ErrorReply(
+                        200,
+                        "unknown_command",
+                        $"등록되지 않은 명령입니다: {request.command}");
+                }
+
+                RuntimeCommandResult result =
+                    registered.Handler(requestJson);
+
+                return ResultReply(
+                    result ??
+                    RuntimeCommandResult.Fail(
+                        "null_result",
+                        $"명령 '{request.command}'이 결과를 반환하지 않았습니다."));
             }
             catch (Exception exception)
             {
-                return ErrorReply(200, "handler_failed", exception.Message);
+                return ErrorReply(
+                    200,
+                    "handler_failed",
+                    exception.Message);
             }
         }
 
-        private static HttpReply ResultReply(object result)
+        private RuntimeCommandResult ReadRuntimeStatus()
         {
-            string json = result == null ? "null" : JsonUtility.ToJson(result);
-            return new HttpReply(200, $"{{\"ok\":true,\"result\":{json}}}");
+            Scene scene = SceneManager.GetActiveScene();
+
+            return RuntimeCommandResult.Ok(
+                new RuntimeStatusResult
+                {
+                    product = GetSessionProductName(),
+                    unityVersion = Application.unityVersion,
+                    processId = System.Diagnostics.Process
+                        .GetCurrentProcess()
+                        .Id,
+                    frameCount = Time.frameCount,
+                    sceneName = scene.IsValid()
+                        ? scene.name
+                        : string.Empty,
+                    isPaused = Time.timeScale == 0f,
+                    developmentBuild = Debug.isDebugBuild
+                });
         }
 
-        private static HttpReply ErrorReply(
-            int statusCode,
-            string code,
-            string message)
+        private static HttpReply DiagnosticsDisabledReply()
         {
-            return new HttpReply(
-                statusCode,
-                "{\"ok\":false,\"error\":{" +
-                $"\"code\":\"{Escape(code)}\"," +
-                $"\"message\":\"{Escape(message)}\"" +
-                "}}");
+            return ErrorReply(
+                200,
+                "diagnostics_disabled",
+                "범용 런타임 진단이 비활성화되어 있습니다.");
+        }
+
+        private BuildInfoResult ReadBuildInfo()
+        {
+            return new BuildInfoResult
+            {
+                product = GetSessionProductName(),
+                version = Application.version,
+                unityVersion = Application.unityVersion,
+                buildId = Application.buildGUID,
+                developmentBuild = Debug.isDebugBuild,
+                platform = Application.platform.ToString(),
+                scriptingBackend = GetScriptingBackend(),
+                sourceRevision = sourceRevision ?? string.Empty,
+                processId = System.Diagnostics.Process
+                    .GetCurrentProcess()
+                    .Id
+            };
+        }
+
+        private LogReadResult ReadLogs(string requestJson)
+        {
+            DiagnosticsPayload payload = ReadDiagnosticsPayload(requestJson);
+
+            int limit = payload.limit <= 0
+                ? DefaultLogReadCount
+                : Mathf.Clamp(
+                    payload.limit,
+                    1,
+                    MaximumLogReadCount);
+
+            long requestedSinceSequence =
+                Math.Max(0L, payload.sinceSequence);
+
+            string level =
+                payload.level?.Trim() ?? string.Empty;
+
+            string contains =
+                payload.contains ?? string.Empty;
+
+            lock (logGate)
+            {
+                bool cursorReset =
+                    requestedSinceSequence > latestLogSequence;
+
+                long sinceSequence =
+                    cursorReset ? 0L : requestedSinceSequence;
+
+                bool hasRecords = logQueue.Count > 0;
+
+                long oldestSequence = hasRecords
+                    ? logQueue.Peek().Sequence
+                    : 0L;
+
+                bool truncated =
+                    hasRecords &&
+                    sinceSequence < oldestSequence - 1;
+
+                long nextSequence = truncated
+                    ? oldestSequence - 1
+                    : sinceSequence;
+
+                bool hasMore = false;
+
+                var entryList = new List<LogEntryResult>(
+                    Math.Min(limit, logQueue.Count));
+
+                foreach (LogRecord record in logQueue)
+                {
+                    if (record.Sequence <= sinceSequence)
+                    {
+                        continue;
+                    }
+
+                    if (entryList.Count >= limit)
+                    {
+                        hasMore = true;
+                        break;
+                    }
+
+                    nextSequence = record.Sequence;
+
+                    if (!string.IsNullOrEmpty(level) &&
+                        !string.Equals(
+                            record.Level,
+                            level,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (!string.IsNullOrEmpty(contains) &&
+                        record.Message.IndexOf(
+                            contains,
+                            StringComparison.OrdinalIgnoreCase) < 0)
+                    {
+                        continue;
+                    }
+
+                    entryList.Add(
+                        new LogEntryResult
+                        {
+                            sequence = record.Sequence,
+                            timestampUtc = record.TimestampUtc,
+                            level = record.Level,
+                            message = record.Message,
+                            stackTrace = payload.includeStackTrace
+                                ? record.StackTrace
+                                : string.Empty
+                        });
+                }
+
+                return new LogReadResult
+                {
+                    entries = entryList.ToArray(),
+                    oldestSequence = oldestSequence,
+                    newestSequence = latestLogSequence,
+                    nextSequence = nextSequence,
+                    truncated = truncated,
+                    hasMore = hasMore,
+                    cursorReset = cursorReset
+                };
+            }
+        }
+
+        private MetricsSnapshotResult ReadMetricsSnapshot()
+        {
+            float smoothDeltaTime = Time.smoothDeltaTime;
+
+            return new MetricsSnapshotResult
+            {
+                frameCount = Time.frameCount,
+                unscaledDeltaTimeMs =
+                    Time.unscaledDeltaTime * 1000f,
+                smoothDeltaTimeMs =
+                    smoothDeltaTime * 1000f,
+                approximateFps =
+                    smoothDeltaTime > 0f
+                        ? 1f / smoothDeltaTime
+                        : 0f,
+                managedMemoryBytes =
+                    GC.GetTotalMemory(false),
+                totalAllocatedMemoryBytes =
+                    Profiler.GetTotalAllocatedMemoryLong(),
+                totalReservedMemoryBytes =
+                    Profiler.GetTotalReservedMemoryLong(),
+                monoHeapBytes =
+                    Profiler.GetMonoHeapSizeLong(),
+                monoUsedBytes =
+                    Profiler.GetMonoUsedSizeLong(),
+                systemMemoryMb =
+                    SystemInfo.systemMemorySize,
+                graphicsMemoryMb =
+                    SystemInfo.graphicsMemorySize
+            };
+        }
+
+        private ScreenshotResult CaptureScreenshot()
+        {
+            string safeFolderName =
+                Path.GetFileName(diagnosticsFolderName);
+
+            if (string.IsNullOrWhiteSpace(safeFolderName))
+            {
+                safeFolderName =
+                    "GameRuntimeMcpDiagnostics";
+            }
+
+            string directory =
+                Path.Combine(
+                    Application.persistentDataPath,
+                    safeFolderName);
+
+            Directory.CreateDirectory(directory);
+
+            string fileName =
+                $"runtime_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}.png";
+
+            string outputPath =
+                Path.Combine(directory, fileName);
+
+            ScreenCapture.CaptureScreenshot(outputPath);
+
+            return new ScreenshotResult
+            {
+                queued = true,
+                path = outputPath,
+                frameCount = Time.frameCount
+            };
+        }
+
+        private static DiagnosticsPayload ReadDiagnosticsPayload(
+            string requestJson)
+        {
+            try
+            {
+                DiagnosticsRequest request =
+                    JsonUtility.FromJson<DiagnosticsRequest>(
+                        requestJson);
+
+                return request?.payload ??
+                       new DiagnosticsPayload();
+            }
+            catch (ArgumentException)
+            {
+                return new DiagnosticsPayload();
+            }
+        }
+
+        private void SubscribeLogs()
+        {
+            if (!enableDiagnostics || logSubscribed)
+            {
+                return;
+            }
+
+            Application.logMessageReceivedThreaded +=
+                OnLogMessageReceived;
+
+            logSubscribed = true;
+        }
+
+        private void UnsubscribeLogs()
+        {
+            if (!logSubscribed)
+            {
+                return;
+            }
+
+            Application.logMessageReceivedThreaded -=
+                OnLogMessageReceived;
+
+            logSubscribed = false;
+        }
+
+        private void ResetLogBuffer()
+        {
+            lock (logGate)
+            {
+                logQueue.Clear();
+                latestLogSequence = 0L;
+            }
+        }
+
+        private void OnLogMessageReceived(
+            string condition,
+            string stackTrace,
+            LogType type)
+        {
+            int capacity =
+                Mathf.Clamp(
+                    logCapacity,
+                    16,
+                    MaximumLogCapacity);
+
+            var record = new LogRecord
+            {
+                TimestampUtc =
+                    DateTime.UtcNow.ToString("O"),
+                Level =
+                    type.ToString().ToLowerInvariant(),
+                Message =
+                    Bound(
+                        condition,
+                        Math.Max(
+                            128,
+                            maxLogMessageCharacters)),
+                StackTrace =
+                    Bound(
+                        stackTrace,
+                        Math.Max(
+                            128,
+                            maxStackTraceCharacters))
+            };
+
+            lock (logGate)
+            {
+                record.Sequence = ++latestLogSequence;
+                logQueue.Enqueue(record);
+
+                while (logQueue.Count > capacity)
+                {
+                    logQueue.Dequeue();
+                }
+            }
+        }
+
+        private string GetSessionProductName()
+        {
+            return string.IsNullOrWhiteSpace(sessionProductName)
+                ? Application.productName
+                : sessionProductName.Trim();
+        }
+
+        private static bool IsSystemCommand(string command)
+        {
+            return command == RuntimeStatusCommand ||
+                   command == RuntimeBuildInfoCommand ||
+                   command == RuntimeLogsReadCommand ||
+                   command == RuntimeMetricsSnapshotCommand ||
+                   command == RuntimeCaptureScreenshotCommand;
         }
 
         private static string NormalizePath(string value)
@@ -726,28 +1527,185 @@ namespace GameRuntimeMcp
                 : "/" + path;
         }
 
-        private static string Escape(string value)
+        private static string GetScriptingBackend()
+        {
+#if ENABLE_IL2CPP
+            return "IL2CPP";
+#elif ENABLE_MONO
+            return "Mono";
+#else
+            return "Unknown";
+#endif
+        }
+
+        private static string Bound(
+            string value,
+            int maximumCharacters)
+        {
+            value = value ?? string.Empty;
+
+            if (value.Length <= maximumCharacters)
+            {
+                return value;
+            }
+
+            return value.Substring(0, maximumCharacters) +
+                   "... (잘림)";
+        }
+
+        private static HttpReply ResultReply(
+            RuntimeCommandResult result)
+        {
+            if (result == null)
+            {
+                return ErrorReply(
+                    200,
+                    "null_result",
+                    "명령 결과가 없습니다.");
+            }
+
+            if (!result.Success)
+            {
+                return ErrorReply(
+                    200,
+                    result.Code,
+                    result.Message);
+            }
+
+            string dataJson =
+                string.IsNullOrWhiteSpace(result.DataJson)
+                    ? "null"
+                    : result.DataJson;
+
+            return new HttpReply(
+                200,
+                $"{{\"ok\":true,\"result\":{dataJson}}}");
+        }
+
+        private static HttpReply ErrorReply(
+            int statusCode,
+            string code,
+            string message)
+        {
+            return new HttpReply(
+                statusCode,
+                "{\"ok\":false,\"error\":{" +
+                $"\"code\":\"{EscapeJsonString(code)}\"," +
+                $"\"message\":\"{EscapeJsonString(message)}\"" +
+                "}}");
+        }
+
+        private static string SerializeJsonValue(object value)
+        {
+            if (value == null)
+            {
+                return "null";
+            }
+
+            if (value is string text)
+            {
+                return $"\"{EscapeJsonString(text)}\"";
+            }
+
+            if (value is bool boolean)
+            {
+                return boolean ? "true" : "false";
+            }
+
+            if (value is char character)
+            {
+                return $"\"{EscapeJsonString(character.ToString())}\"";
+            }
+
+            Type type = value.GetType();
+            if (type.IsEnum)
+            {
+                return $"\"{EscapeJsonString(value.ToString())}\"";
+            }
+
+            if (type.IsPrimitive || value is decimal)
+            {
+                return Convert.ToString(
+                           value,
+                           CultureInfo.InvariantCulture) ??
+                       "null";
+            }
+
+            return JsonUtility.ToJson(value);
+        }
+
+        private static string EscapeJsonString(string value)
         {
             if (string.IsNullOrEmpty(value))
             {
                 return string.Empty;
             }
 
-            return value
-                .Replace("\\", "\\\\")
-                .Replace("\"", "\\\"")
-                .Replace("\r", "\\r")
-                .Replace("\n", "\\n")
-                .Replace("\t", "\\t");
+            var builder =
+                new StringBuilder(value.Length + 8);
+
+            foreach (char character in value)
+            {
+                switch (character)
+                {
+                    case '"':
+                        builder.Append("\\\"");
+                        break;
+
+                    case '\\':
+                        builder.Append("\\\\");
+                        break;
+
+                    case '\b':
+                        builder.Append("\\b");
+                        break;
+
+                    case '\f':
+                        builder.Append("\\f");
+                        break;
+
+                    case '\n':
+                        builder.Append("\\n");
+                        break;
+
+                    case '\r':
+                        builder.Append("\\r");
+                        break;
+
+                    case '\t':
+                        builder.Append("\\t");
+                        break;
+
+                    default:
+                        if (char.IsControl(character))
+                        {
+                            builder.Append("\\u");
+                            builder.Append(
+                                ((int)character)
+                                .ToString("x4"));
+                        }
+                        else
+                        {
+                            builder.Append(character);
+                        }
+
+                        break;
+                }
+            }
+
+            return builder.ToString();
         }
 
         private static void WriteHttp(
             HttpListenerResponse response,
             HttpReply reply)
         {
-            byte[] bytes = Encoding.UTF8.GetBytes(reply.body);
-            response.StatusCode = reply.statusCode;
-            response.ContentType = "application/json; charset=utf-8";
+            byte[] bytes =
+                Encoding.UTF8.GetBytes(reply.Body);
+
+            response.StatusCode = reply.StatusCode;
+            response.ContentType =
+                "application/json; charset=utf-8";
             response.ContentLength64 = bytes.Length;
             response.Headers["Cache-Control"] = "no-store";
 

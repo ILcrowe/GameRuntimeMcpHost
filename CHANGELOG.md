@@ -4,11 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## 미출시
 
-- Unity 게임 상태 조회, 주변 탐색, 실제 샘플 이동, 명시적 상호작용, 인게임 채팅을 제공하는 등록형 게임 플레이 샘플을 추가했습니다.
-- 게임 플레이 샘플 Bridge를 현재 Host의 `protocol` / `command` / `payload` RPC 계약과 일치시켰습니다.
-- 세션별 토큰, 제한된 요청 Body, 메인 스레드 처리 예산, Timeout 상태 구분, 안전한 Listener 종료를 적용했습니다.
-- 낮은 추론량 Skill에 게임 플레이 샘플의 연결·이동·상호작용·검증 순서를 추가했습니다.
-- 게임 플레이 도구 매니페스트 정적 계약 테스트와 인증·상태·이동·상호작용·채팅 PlayMode 왕복 테스트를 추가했습니다.
+- 공통 `GameRuntimeMcpBridge` 기반 Unity 통합 샘플
+- Owner 단위 원자적 `RegisterAll`·`UnregisterAll` 명령 등록
+- 게임 상태·주변 조회·이동·상호작용·채팅 샘플
+- Bridge 내장 Build·Log·Metrics·Screenshot 진단
+- 실행별 Token·Loopback Listener·메인 스레드 처리 예산
+- 시작 전 Timeout과 실행 여부 불명 Timeout 구분
+- 한글 XML Summary 주석과 한글 중심 연동 문서
+- 낮은 추론량 연결·행동·검증 Skill
+- 통합 Tool Manifest 정적 계약 테스트
+- 연결·진단·게임 행동 PlayMode 왕복 테스트
+- 중복 Unity Bridge·진단 Provider·게임 플레이 샘플 폴더 제거
 
 ## 0.3.0 — 2026-09-04
 

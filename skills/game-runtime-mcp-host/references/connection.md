@@ -1,63 +1,73 @@
 # 런타임 연결
 
-GameRuntimeMcpHost 런타임 세션에 연결하거나 연결을 복구할 때 이 절차를 사용한다.
-
 ## 정상 연결
 
-1. MCP 클라이언트에 런타임 도구가 노출되어 있는지 확인한다.
-2. `runtime_status`가 있으면 호출한다.
-3. 제품·프로세스·런타임 식별값을 확인한다.
-4. 현재 빌드인지 확인해야 하고 `runtime_build_info`가 있으면 호출한다.
-5. 요청한 작업으로 진행한다.
+```text
+Tool 노출 확인
+-> runtime_status
+-> Product / Process / Scene 확인
+-> 필요 시 runtime_build_info
+-> 요청 작업
+```
 
-Host는 전송만 소유한다. 권위 상태와 허용 명령은 게임 소유 런타임 어댑터가 소유한다.
+Host의 책임: 전송.
 
-## 실패 라우팅
+게임 Adapter의 책임:
 
-### 런타임 세션 없음
+```text
+허용 Command
+권한
+합법 행동
+권위 상태 변경
+```
 
-게임 플레이 실패가 아니라 연결 상태로 처리한다.
+## Session 없음
 
-- 게임 플레이 상태 변경 도구를 호출하지 않는다.
-- 현재 일치하는 런타임 세션을 찾을 수 없다고 보고한다.
-- Host가 세션 이름·제품 자동 탐색으로 설정되어 있으면, 런타임이 새 세션 기술자를 게시한 뒤 다음 도구 호출에서 연결될 수 있다.
+- 게임 플레이 상태 변경 중단
+- 일치하는 Runtime Session 없음 보고
+- Runtime의 Session Descriptor 게시 뒤 읽기 Tool 재호출
+- `--session-name`·`--session-product` 자동 탐색 사용 시 다음 호출에서 재탐색
 
-### 연결 거부 / 오래된 Endpoint
+## Connection Refused·오래된 Endpoint
 
-- 게임 행동이 실행되었다고 가정하지 않는다.
-- 세션 재탐색 뒤 읽기 전용 상태 호출을 다시 시도한다.
-- 새 런타임이 정상 응답한 뒤에만 계속한다.
+- 행동 실행 여부 추측 금지
+- Session 재탐색
+- 읽기 전용 `runtime_status` 재호출
+- 새 Runtime 정상 응답 뒤 작업 재개
 
-### 인증 실패
+## 인증 실패
 
-런타임이 재시작되면 세션 토큰이 교체된다.
+Runtime 재시작 시 Session Token 교체 가능.
 
-- 토큰을 요청하거나 표시하지 않는다.
-- Host가 최신 세션 기술자를 다시 읽을 수 있도록 읽기 전용 상태 호출을 다시 시도한다.
-- 계속 인증에 실패하면 상태 변경 시도를 중단하고 연결 실패를 보고한다.
+```text
+Token 요청·출력 금지
+-> 읽기 전용 상태 호출
+-> Host의 최신 Descriptor 재로딩
+-> 계속 실패 시 상태 변경 중단
+```
 
-### 프로토콜 불일치
+## Protocol 불일치
 
-반복 재연결하지 않는다.
+- 반복 재연결 금지
+- 상태 변경 중단
+- 기대·실제 Protocol Version 보고
+- Host·Adapter 호환성 문제로 분류
 
-- 상태 변경 시도를 중단한다.
-- 확인 가능한 경우 기대 프로토콜 버전과 실제 버전을 함께 보고한다.
-- 어댑터와 Host의 호환성 문제로 처리한다.
+## 작업 중 Runtime 재시작
 
-### 작업 중 런타임 재시작
+```text
+runtime_status 재확인
+-> 필요 시 runtime_build_info
+-> 이전 Process·Session 가정 폐기
+-> 최소 상태 재조회
+-> 다음 행동
+```
 
-1. `runtime_status`를 다시 확인한다.
-2. 가능하면 빌드 식별값을 다시 확인한다.
-3. 이전 프로세스·세션에 묶인 가정을 폐기한다.
-4. 다음 행동에 필요한 최소 상태를 다시 읽는다.
+## 대상 식별 우선순위
 
-## 대상 식별 순서
+1. Product·Runtime 이름
+2. Process ID·Session ID
+3. Build GUID·Build ID
+4. Source Revision·Version
 
-노출된 경우 다음 순서로 안정적인 근거를 사용한다.
-
-1. 제품·런타임 이름
-2. 프로세스 ID 또는 세션 ID
-3. Build GUID 또는 Build ID
-4. 소스 Revision 또는 버전 메타데이터
-
-연결된 런타임이 다른 제품이거나 명백히 오래된 빌드라면 상태 변경을 진행하지 않는다.
+다른 Product 또는 오래된 Build 확인 시 상태 변경 중단.

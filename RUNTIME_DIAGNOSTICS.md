@@ -1,46 +1,42 @@
-# Optional Runtime Diagnostics Contract
+# Optional runtime diagnostics contract
 
-GameRuntimeMcpHost remains a transport layer. This document defines optional, game-independent runtime diagnostics that a game-owned adapter may expose through the existing tool manifest.
+`GameRuntimeMcpHost` remains transport-only. Generic diagnostics are optional, read-mostly observations exposed by the game-owned adapter through its existing tool manifest.
 
-No CLI layer is required. These are ordinary MCP tools forwarded by GameRuntimeMcpHost to the connected Player adapter.
+The unified Unity sample implements these diagnostics inside `GameRuntimeMcpBridge`. No second listener, session, token, or provider component.
 
-## Why this contract exists
+## Tools
 
-Gameplay commands should remain explicit and game-owned. A small diagnostic surface is still useful for connection checks, build freshness, logs, performance, and visible-output verification without adding one-off gameplay tools.
-
-Recommended optional tools:
-
-| MCP tool | RPC command | Purpose |
+| MCP tool | Unity RPC | Purpose |
 |---|---|---|
-| `runtime_status` | `runtime.status` | Runtime/process liveness and identity |
-| `runtime_build_info` | `runtime.build_info` | Build/version identity |
+| `runtime_status` | `runtime.status` | Runtime, process, and scene state |
+| `runtime_build_info` | `runtime.build_info` | Build and version identity |
 | `runtime_logs_read` | `runtime.logs.read` | Bounded incremental logs |
-| `runtime_metrics_snapshot` | `runtime.metrics.snapshot` | Bounded runtime performance snapshot |
-| `runtime_capture_screenshot` | `runtime.capture_screenshot` | One visual verification capture |
+| `runtime_metrics_snapshot` | `runtime.metrics.snapshot` | One performance snapshot |
+| `runtime_capture_screenshot` | `runtime.capture_screenshot` | Adapter-controlled visual capture |
 
-The generic contract manifest is [`examples/runtime-diagnostics.tools.json`](examples/runtime-diagnostics.tools.json). The copy-ready Unity sample publishes the same diagnostics in [`examples/unity/unity-runtime-sample.tools.json`](examples/unity/unity-runtime-sample.tools.json).
-
-A runtime adapter must implement a listed RPC command before publishing its MCP tool.
+- Diagnostics-only manifest: `examples/runtime-diagnostics.tools.json`
+- Unified Unity manifest: `examples/unity/game-runtime.tools.json`
 
 ## Boundaries
 
-- Diagnostics are read-mostly observation tools.
-- Gameplay authority stays in game-specific commands.
-- Runtime arbitrary-code execution is intentionally not part of this baseline.
-- Session tokens must never appear in diagnostic output.
-- Logs must be bounded and incrementally readable.
-- Screenshots must use an adapter-controlled diagnostics directory unless a stricter game-owned contract says otherwise.
-- Metrics are bounded snapshots, not unbounded streaming.
+- Read-mostly observation
+- No gameplay authority
+- No replacement for game-owned state tools
+- No arbitrary runtime C#
+- No session token output
+- Bounded log ring buffer
+- Bounded metrics snapshot
+- Adapter-controlled screenshot path
 
-## Suggested result contracts
+## Build identity
 
-### `runtime.build_info`
+Recommended result:
 
 ```json
 {
   "product": "ExampleGame",
   "version": "0.1.0",
-  "engineVersion": "6000.x",
+  "unityVersion": "6000.x",
   "buildId": "stable-build-id",
   "developmentBuild": true,
   "platform": "WindowsPlayer",
@@ -50,52 +46,39 @@ A runtime adapter must implement a listed RPC command before publishing its MCP 
 }
 ```
 
-### `runtime.logs.read`
+`sourceRevision` is optional build-pipeline metadata.
 
-```json
-{
-  "entries": [
-    {
-      "sequence": 42,
-      "timestampUtc": "2026-09-04T00:00:00.0000000Z",
-      "level": "error",
-      "message": "bounded message",
-      "stackTrace": ""
-    }
-  ],
-  "oldestSequence": 1,
-  "newestSequence": 48,
-  "nextSequence": 42,
-  "truncated": false,
-  "hasMore": true,
-  "cursorReset": false
-}
+## Incremental logs
+
+```text
+first call: sinceSequence = 0
+next call: sinceSequence = previous nextSequence
+continue: hasMore == true
 ```
 
-The adapter owns ring-buffer size and message bounds.
+Signals:
 
-- Send the previous `nextSequence` as the next `sinceSequence`.
-- Continue while `hasMore` is true.
-- `truncated` means the requested cursor predates the oldest retained entry.
-- `cursorReset` means the supplied cursor was ahead of the current runtime sequence, normally after a process/session change; the adapter restarted the read from its current retained range.
-- Filters may advance `nextSequence` across inspected non-matching entries, but a page must not skip uninspected entries beyond its limit.
+- `truncated`: requested history already dropped from the ring buffer
+- `cursorReset`: cursor belongs to an older/different runtime sequence
+- `nextSequence`: next cursor
+- `newestSequence`: newest sequence at request time
 
-### `runtime.metrics.snapshot`
+Filtered entries advance the cursor only across inspected records. A page never skips uninspected records beyond its limit.
 
-Return only metrics that the adapter can collect cheaply and consistently. Keep the schema stable for before/after comparison.
+## Metrics
 
-### `runtime.capture_screenshot`
+One low-cost current-frame snapshot for performance questions and before/after comparison.
 
-Return metadata and the generated file path. Do not send a large base64 image through the tool result by default, and do not accept an arbitrary caller-selected output path in the baseline contract.
+## Screenshot
 
-## Unity provider
+Generated under an adapter-controlled directory below `Application.persistentDataPath`.
 
-[`UnityRuntimeDiagnosticsProvider`](examples/unity/Runtime/UnityRuntimeDiagnosticsProvider.cs) implements build identity, bounded logs, a metrics snapshot, and an adapter-controlled screenshot path. The Unity sample bridge delegates the matching RPC commands to this optional component while retaining one listener/session/token.
+`queued = true` means capture scheduling, not guaranteed file-write completion.
 
-## Skill routing
+## Priority
 
-The repository includes a low-reasoning skill under [`skills/game-runtime-mcp-host/`](skills/game-runtime-mcp-host/).
-
-Its fixed order is:
-
-`target gate -> runtime status -> build identity -> exact game tool -> result/state verification -> optional diagnostics`
+```text
+exact game-owned state/action tool
+-> necessary generic diagnostic
+-> capability missing
+```
