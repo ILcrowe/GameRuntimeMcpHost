@@ -94,9 +94,26 @@ class GrokPersistentSession(GrokHeadlessSession):
                           "systemPromptOverride": self.system_prompt},
             }, timeout=30)
             methods = {m.get("id") for m in init.get("authMethods", [])}
-            if "cached_token" not in methods:
-                raise RuntimeError("Grok cached-token authentication unavailable; login is required.")
-            self.rpc.request("authenticate", {"methodId": "cached_token", "_meta": {"headless": True}}, timeout=30)
+            if "cached_token" in methods:
+                auth_method = "cached_token"
+            elif "grok.com" in methods:
+                # Grok CLI 1.0.13 exposes the current OAuth-backed method under this
+                # ID. An already authenticated CLI completes it without a separate
+                # game-owned credential, while an unauthenticated CLI reports the
+                # login requirement below.
+                auth_method = "grok.com"
+            else:
+                available = ", ".join(sorted(method for method in methods if method)) or "none"
+                raise RuntimeError(f"Grok exposes no supported authentication method (available: {available}).")
+            try:
+                self.rpc.request("authenticate", {"methodId": auth_method, "_meta": {"headless": True}}, timeout=30)
+            except Exception as exc:
+                if auth_method == "grok.com":
+                    raise RuntimeError(
+                        "Grok CLI authentication is required or expired. "
+                        "Sign in on this machine with `grok login --oauth` (or `grok login --device-auth`), "
+                        "then reconnect from the game.") from exc
+                raise
             if self.grok_session_id:
                 self._migrate_saved_session(self.state_root, self.grok_session_id)
                 # Never silently replace a saved story with an empty conversation.

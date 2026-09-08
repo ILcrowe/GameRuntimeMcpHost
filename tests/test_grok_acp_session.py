@@ -10,6 +10,7 @@ from game_runtime_grok_acp_session import GrokPersistentSession
 
 class FakeRpc:
     instances = []
+    auth_methods = [{"id": "cached_token"}]
 
     def __init__(self, *args, **kwargs):
         self.is_running = False
@@ -29,7 +30,7 @@ class FakeRpc:
     def request(self, method, params, **kwargs):
         self.calls.append((method, params))
         if method == "initialize":
-            return {"authMethods": [{"id": "cached_token"}], "agentCapabilities": {"loadSession": True}}
+            return {"authMethods": self.auth_methods, "agentCapabilities": {"loadSession": True}}
         if method == "session/new":
             return {"sessionId": "session-" + str(len(self.calls))}
         if method == "session/prompt":
@@ -41,6 +42,10 @@ class FakeRpc:
 
 
 class PersistentSessionTests(unittest.TestCase):
+    def setUp(self):
+        FakeRpc.instances.clear()
+        FakeRpc.auth_methods = [{"id": "cached_token"}]
+
     def test_legacy_conversation_is_copied_without_overwriting_shared_history(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -90,6 +95,16 @@ class PersistentSessionTests(unittest.TestCase):
             self.assertTrue(any(m == "session/load" for m, _ in restored.rpc.calls))
             self.assertFalse(any(m == "session/new" for m, _ in restored.rpc.calls))
             restored.close()
+
+    @patch("game_runtime_grok_acp_session.JsonRpcStdioClient", FakeRpc)
+    def test_current_grok_oauth_method_is_used_when_cached_token_is_not_advertised(self):
+        FakeRpc.auth_methods = [{"id": "grok.com"}]
+        with tempfile.TemporaryDirectory() as root:
+            session = GrokPersistentSession(Path(root), command="fake", source_grok_home=Path(root), logger=lambda _: None)
+            session.start()
+            auth_calls = [params for method, params in session.rpc.calls if method == "authenticate"]
+            self.assertEqual(auth_calls, [{"methodId": "grok.com", "_meta": {"headless": True}}])
+            session.close()
 
 
 if __name__ == "__main__":
