@@ -101,6 +101,31 @@ class FakeRpc:
 
 
 class CodexPersistentSessionTests(unittest.TestCase):
+    def test_optional_inference_profile_applies_to_resume_and_utility_without_changing_defaults(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", FakeRpc):
+            original = {"skills.include_instructions": False, "model_reasoning_effort": "high"}
+            session = module.CodexPersistentSession(Path(temp), command="codex",
+                base_instructions="Game narrator", thread_config=original)
+            original["skills.include_instructions"] = True
+            session.descriptor.write_id("codex", "thr-saved-story")
+            session.start("model", "low")
+            session._get_utility_thread("action-interpreter", model="model", reasoning_effort="low")
+            starts = [(method, params) for method, params in session.rpc.calls
+                      if method in ("thread/resume", "thread/start")]
+            self.assertEqual([method for method, _ in starts], ["thread/resume", "thread/start"])
+            self.assertEqual(starts[0][1]["threadId"], "thr-saved-story")
+            for _, params in starts:
+                self.assertEqual(params["baseInstructions"], "Game narrator")
+                self.assertFalse(params["config"]["skills.include_instructions"])
+                self.assertEqual(params["config"]["model_reasoning_effort"], "low")
+                self.assertEqual(params["sandbox"], "read-only")
+            session.close()
+            default = module.CodexPersistentSession(Path(temp)/"default", command="codex")
+            params = default._common_thread_params("model", "low")
+            self.assertNotIn("baseInstructions", params)
+            self.assertEqual(params["config"], {"model_reasoning_effort": "low"})
+            default.close()
+
     def test_failed_resume_preserves_story_and_retry_uses_same_id(self):
         for error in (
             module.RpcError("thread/resume", {"code": -32602, "message": "model unavailable"}),

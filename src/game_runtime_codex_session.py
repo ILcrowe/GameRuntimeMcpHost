@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import shutil
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,8 @@ class CodexPersistentSession:
         reasoning_effort: str | None = None,
         client_name: str = "game-runtime-agent",
         client_title: str = "Game Runtime External Agent",
+        base_instructions: str | None = None,
+        thread_config: dict[str, Any] | None = None,
     ):
         self.state_root = Path(state_root).resolve()
         self.state_root.mkdir(parents=True, exist_ok=True)
@@ -49,6 +52,8 @@ class CodexPersistentSession:
         self.reasoning_effort = reasoning_effort
         self.client_name = client_name
         self.client_title = client_title
+        self.base_instructions = base_instructions
+        self.thread_config = copy.deepcopy(thread_config or {})
         self.rpc: JsonRpcStdioClient | None = None
         self.thread_id = ""
         self.last_requested_model = ""
@@ -64,13 +69,18 @@ class CodexPersistentSession:
         return self.thread_id
 
     def _common_thread_params(self, model: str, reasoning_effort: str) -> dict[str, Any]:
-        return {
+        config = copy.deepcopy(self.thread_config)
+        config["model_reasoning_effort"] = reasoning_effort
+        params = {
             "model": model,
             "cwd": str(self.workspace),
             "approvalPolicy": "never",
             "sandbox": "read-only",
-            "config": {"model_reasoning_effort": reasoning_effort},
+            "config": config,
         }
+        if self.base_instructions is not None:
+            params["baseInstructions"] = self.base_instructions
+        return params
 
     def start(self, model: str, reasoning_effort: str) -> None:
         if self.rpc is not None and self.rpc.is_running and self.thread_id:
