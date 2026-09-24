@@ -59,6 +59,8 @@ class CodexPersistentSession:
         self.last_requested_model = ""
         self.last_confirmed_model = ""
         self.utility_thread_ids: dict[str, str] = {}
+        # Optional display observer of primary-thread public text. Never reasoning.
+        self.on_primary_text = None
         self.descriptor = ProviderSessionDescriptor(self.state_root / "provider_sessions.json")
         self.memory_stream = AppendOnlyConversationStream(
             self.state_root / "memory-stream" / "external-gm.jsonl"
@@ -178,15 +180,26 @@ class CodexPersistentSession:
         def on_message(message: dict[str, Any]) -> None:
             method = str(message.get("method") or "")
             params = message.get("params") or {}
+            if params.get("threadId") and params["threadId"] != thread_id:
+                return
+            changed = False
             if method == "item/agentMessage/delta":
                 delta = params.get("delta")
                 if delta:
                     assistant_parts.append(str(delta))
+                    changed = True
             elif method == "item/completed":
                 item = params.get("item") or {}
                 if item.get("type") == "agentMessage" and item.get("text"):
                     assistant_parts.clear()
                     assistant_parts.append(str(item.get("text")))
+                    changed = True
+            if changed and not channel and self.on_primary_text is not None:
+                try:
+                    self.on_primary_text("".join(assistant_parts))
+                except Exception:
+                    # Display observers must not invalidate the authoritative result.
+                    pass
 
         response = self.rpc.request(
             "turn/start",

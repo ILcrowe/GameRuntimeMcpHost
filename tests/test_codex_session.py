@@ -101,6 +101,23 @@ class FakeRpc:
 
 
 class CodexPersistentSessionTests(unittest.TestCase):
+    def test_public_observer_excludes_utility_and_cannot_break_generation(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", FakeRpc):
+            session = module.CodexPersistentSession(Path(temp), command="codex")
+            seen = []
+            session.on_primary_text = seen.append
+            args = dict(output_schema={"type": "object"}, model="gpt-test", reasoning_effort="low")
+            session.generate("story", **args)
+            self.assertEqual(len(seen), 1)
+            self.assertEqual(json.loads(seen[0])["narration"], "response 1")
+            session.generate_utility("action-interpreter", "check", **args)
+            self.assertEqual(len(seen), 1)
+            def broken_display(text):
+                raise RuntimeError("display unavailable")
+            session.on_primary_text = broken_display
+            self.assertEqual(session.generate("story again", **args)["narration"], "response 3")
+            session.close()
+
     def test_optional_inference_profile_applies_to_resume_and_utility_without_changing_defaults(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", FakeRpc):
             original = {"skills.include_instructions": False, "model_reasoning_effort": "high"}
