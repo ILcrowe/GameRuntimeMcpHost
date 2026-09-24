@@ -51,6 +51,8 @@ class FakeRpc:
             return {"thread": {"id": thread_id}}
         if method == "thread/resume":
             return {"thread": {"id": params["threadId"]}}
+        if method == "thread/fork":
+            return {"thread": {"id": "checkpoint-fork"}}
         if method == "turn/start":
             self.turn_index += 1
             return {"turn": {"id": f"turn-{self.turn_index}"}}
@@ -104,6 +106,25 @@ class FakeRpc:
 
 
 class CodexPersistentSessionTests(unittest.TestCase):
+    def test_checkpoint_forks_through_saved_turn_without_reverting_source(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", FakeRpc):
+            session = module.CodexPersistentSession(Path(temp), command="codex")
+            settings = dict(model="gpt-test", reasoning_effort="low")
+            session.generate("saved story", output_schema={"type": "object"}, **settings)
+            self.assertEqual(session.last_completed_turn_id, "turn-1")
+            source = session.thread_id
+            session.generate_utility("action-interpreter", "check", output_schema={"type": "object"}, **settings)
+            self.assertEqual(session.last_completed_turn_id, "turn-1")
+            session.fork_primary_through(source, "turn-1", **settings)
+            self.assertEqual(session.thread_id, "checkpoint-fork")
+            self.assertEqual(session.descriptor.read_id("codex"), "checkpoint-fork")
+            calls = session.rpc.calls
+            fork = next(params for method, params in calls if method == "thread/fork")
+            self.assertEqual(fork["lastTurnId"], "turn-1")
+            self.assertEqual(fork["threadId"], source)
+            self.assertFalse(any(method in ("thread/revert", "thread/delete") for method, _ in calls))
+            session.close()
+
     def test_opt_in_mcp_isolation_applies_to_primary_resume_and_utility(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", FakeRpc):
             session = module.CodexPersistentSession(Path(temp), command="codex", disable_mcp_servers=True)

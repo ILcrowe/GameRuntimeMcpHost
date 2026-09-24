@@ -62,6 +62,7 @@ class CodexPersistentSession:
         self.thread_id = ""
         self.last_requested_model = ""
         self.last_confirmed_model = ""
+        self.last_completed_turn_id = ""
         self.utility_thread_ids: dict[str, str] = {}
         # Optional display observer of primary-thread public text. Never reasoning.
         self.on_primary_text = None
@@ -301,6 +302,8 @@ class CodexPersistentSession:
 
         text = "".join(assistant_parts).strip()
         result = extract_json_object(text)
+        if not channel:
+            self.last_completed_turn_id = turn_id
         payload: dict[str, Any] = {
             "user": prompt,
             "assistant": result,
@@ -335,6 +338,25 @@ class CodexPersistentSession:
             reasoning_effort=reasoning_effort,
             event_type="turn",
         )
+
+    def fork_primary_through(self, source_thread_id: str, last_turn_id: str,
+                             *, model: str, reasoning_effort: str) -> str:
+        """Restore a game checkpoint without deleting its later, abandoned branch."""
+        if not source_thread_id or not last_turn_id:
+            raise ValueError("A saved thread and completed turn are required")
+        self.start(model, reasoning_effort)
+        response = self.rpc.request("thread/fork", {
+            "threadId": source_thread_id, "lastTurnId": last_turn_id,
+            "excludeTurns": True, **self._common_thread_params(model, reasoning_effort),
+        }, timeout=30)
+        fork_id = str((response.get("thread") or {}).get("id") or "")
+        if not fork_id or fork_id == source_thread_id:
+            raise RuntimeError("Codex checkpoint fork did not return a new thread")
+        self.descriptor.write_id(self.provider_name, fork_id)
+        self.thread_id = fork_id
+        self.last_completed_turn_id = last_turn_id
+        self.utility_thread_ids.clear()
+        return fork_id
 
     def generate_utility(
         self,
