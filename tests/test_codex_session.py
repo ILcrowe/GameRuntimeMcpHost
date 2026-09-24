@@ -19,6 +19,7 @@ class FakeRpc:
     instances = []
 
     def __init__(self, *args, **kwargs):
+        self.command = args[0] if args else []
         self.calls = []
         self.is_running = False
         self.turn_index = 0
@@ -38,6 +39,8 @@ class FakeRpc:
         self.calls.append((method, params))
         if method == "initialize":
             return {}
+        if method == "config/read":
+            return {"config": {"mcp_servers": {"editor-tools": {"command": "private-path"}}}}
         if method == "thread/start":
             self.thread_start_index += 1
             thread_id = (
@@ -101,6 +104,19 @@ class FakeRpc:
 
 
 class CodexPersistentSessionTests(unittest.TestCase):
+    def test_opt_in_mcp_isolation_applies_to_primary_resume_and_utility(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", FakeRpc):
+            session = module.CodexPersistentSession(Path(temp), command="codex", disable_mcp_servers=True)
+            session.descriptor.write_id("codex", "saved-story")
+            session.start("gpt-test", "low")
+            session._get_utility_thread("action-interpreter", model="gpt-test", reasoning_effort="low")
+            self.assertIn("features.plugins=false", session.rpc.command)
+            self.assertIn("mcp_servers.editor-tools.enabled=false", session.rpc.command)
+            for method, params in session.rpc.calls:
+                if method in ("thread/start", "thread/resume"):
+                    self.assertFalse(params["config"]["mcp_servers.editor-tools.enabled"])
+            session.close()
+
     def test_preview_rejects_cancelled_turn_text_before_and_after_start_reply(self):
         class InterleavedRpc(FakeRpc):
             def request(self, method, params=None, timeout=30, notification_handler=None):

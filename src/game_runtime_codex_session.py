@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,7 @@ class CodexPersistentSession:
         client_title: str = "Game Runtime External Agent",
         base_instructions: str | None = None,
         thread_config: dict[str, Any] | None = None,
+        disable_mcp_servers: bool = False,
     ):
         self.state_root = Path(state_root).resolve()
         self.state_root.mkdir(parents=True, exist_ok=True)
@@ -54,6 +56,8 @@ class CodexPersistentSession:
         self.client_title = client_title
         self.base_instructions = base_instructions
         self.thread_config = copy.deepcopy(thread_config or {})
+        self.disable_mcp_servers = disable_mcp_servers
+        self.disabled_mcp_server_names: list[str] = []
         self.rpc: JsonRpcStdioClient | None = None
         self.thread_id = ""
         self.last_requested_model = ""
@@ -72,6 +76,8 @@ class CodexPersistentSession:
 
     def _common_thread_params(self, model: str, reasoning_effort: str) -> dict[str, Any]:
         config = copy.deepcopy(self.thread_config)
+        for name in self.disabled_mcp_server_names:
+            config["mcp_servers." + name + ".enabled"] = False
         config["model_reasoning_effort"] = reasoning_effort
         params = {
             "model": model,
@@ -91,8 +97,11 @@ class CodexPersistentSession:
             self.rpc.close()
         self.thread_id = ""
         self.utility_thread_ids.clear()
+        command = [self.command, "app-server", "--listen", "stdio://"]
+        if self.disable_mcp_servers:
+            command += ["-c", "features.plugins=false", "-c", "features.apps=false"]
         self.rpc = JsonRpcStdioClient(
-            [self.command, "app-server", "--listen", "stdio://"],
+            command,
             cwd=self.workspace,
             include_jsonrpc=False,
             name="codex-app-server",
@@ -110,6 +119,30 @@ class CodexPersistentSession:
             timeout=20,
         )
         self.rpc.notify("initialized", {})
+        self.disabled_mcp_server_names = []
+        if self.disable_mcp_servers:
+            configuration = self.rpc.request("config/read", {
+                "cwd": str(self.workspace), "includeLayers": False,
+            }, timeout=20)
+            servers = (configuration.get("config") or {}).get("mcp_servers") or {}
+            if not isinstance(servers, dict):
+                raise RuntimeError("Codex MCP configuration could not be isolated")
+            self.disabled_mcp_server_names = list(servers)
+            if any(not re.fullmatch(r"[A-Za-z0-9_-]+", name) for name in self.disabled_mcp_server_names):
+                raise RuntimeError("Codex MCP isolation requires simple server identifiers")
+            # Process-level services also consult the startup config. A thread
+            # override alone does not isolate app-server's MCP status/tool pool.
+            if self.disabled_mcp_server_names:
+                self.rpc.close()
+                for name in self.disabled_mcp_server_names:
+                    command += ["-c", "mcp_servers." + name + ".enabled=false"]
+                self.rpc = JsonRpcStdioClient(command, cwd=self.workspace,
+                    include_jsonrpc=False, name="codex-app-server")
+                self.rpc.start()
+                self.rpc.request("initialize", {"clientInfo": {
+                    "name": self.client_name, "title": self.client_title, "version": "0.1.0",
+                }}, timeout=20)
+                self.rpc.notify("initialized", {})
 
         common = self._common_thread_params(model, reasoning_effort)
         stored = self.descriptor.read_id(self.provider_name)
