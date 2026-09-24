@@ -101,6 +101,39 @@ class FakeRpc:
 
 
 class CodexPersistentSessionTests(unittest.TestCase):
+    def test_preview_rejects_cancelled_turn_text_before_and_after_start_reply(self):
+        class InterleavedRpc(FakeRpc):
+            def request(self, method, params=None, timeout=30, notification_handler=None):
+                result = super().request(method, params, timeout, notification_handler)
+                if method == "turn/start":
+                    self.thread = params["threadId"]
+                    self.send(notification_handler, "old-turn", '{"narration":"STALE"}')
+                    self.send(notification_handler, "turn-1", '{"narration":"current"')
+                return result
+
+            def send(self, handler, turn, text, thread=None):
+                handler({"method": "item/agentMessage/delta", "params": {
+                    "threadId": thread or self.thread, "turnId": turn, "delta": text}})
+
+            def wait_for_notification(self, predicate, timeout, notification_handler=None):
+                self.send(notification_handler, "old-turn", "LATE STALE")
+                self.send(notification_handler, "turn-1", "FOREIGN", "other-thread")
+                notification_handler({"method": "item/reasoning/textDelta", "params": {
+                    "threadId": self.thread, "turnId": "turn-1", "delta": "PRIVATE"}})
+                return super().wait_for_notification(predicate, timeout, notification_handler)
+
+        with tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", InterleavedRpc):
+            session = module.CodexPersistentSession(Path(temp), command="codex")
+            seen = []
+            session.on_primary_text = seen.append
+            result = session.generate("story", output_schema={"type": "object"},
+                                      model="gpt-test", reasoning_effort="low")
+            self.assertEqual(seen[0], '{"narration":"current"')
+            self.assertEqual(len(seen), 2)
+            self.assertEqual(json.loads(seen[-1]), result)
+            self.assertFalse(any(word in text for text in seen for word in ("STALE", "FOREIGN", "PRIVATE")))
+            session.close()
+
     def test_public_observer_excludes_utility_and_cannot_break_generation(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", FakeRpc):
             session = module.CodexPersistentSession(Path(temp), command="codex")

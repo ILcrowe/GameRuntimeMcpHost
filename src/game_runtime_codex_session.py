@@ -176,11 +176,22 @@ class CodexPersistentSession:
     ) -> dict[str, Any]:
         assert self.rpc is not None
         assistant_parts: list[str] = []
+        turn_id = ""
+        early_messages: list[dict[str, Any]] = []
 
         def on_message(message: dict[str, Any]) -> None:
             method = str(message.get("method") or "")
             params = message.get("params") or {}
             if params.get("threadId") and params["threadId"] != thread_id:
+                return
+            if method not in ("item/agentMessage/delta", "item/completed"):
+                return
+            if not turn_id:
+                # turn/start can deliver notifications before its reply. Resolve
+                # identity before publishing text left over from a cancelled turn.
+                early_messages.append(message)
+                return
+            if params.get("turnId") and params["turnId"] != turn_id:
                 return
             changed = False
             if method == "item/agentMessage/delta":
@@ -221,6 +232,9 @@ class CodexPersistentSession:
             self.last_confirmed_model = reported_model
         if not turn_id:
             raise RuntimeError("Codex turn/start did not return a turn id")
+        for message in early_messages:
+            on_message(message)
+        early_messages.clear()
 
         try:
             completed = self.rpc.wait_for_notification(
