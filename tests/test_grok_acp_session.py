@@ -46,6 +46,118 @@ class PersistentSessionTests(unittest.TestCase):
         FakeRpc.instances.clear()
         FakeRpc.auth_methods = [{"id": "cached_token"}]
 
+    @patch("game_runtime_grok_acp_session.JsonRpcStdioClient", FakeRpc)
+    def test_provider_wait_uses_remaining_game_deadline_and_skips_expired_prompt(self):
+        with tempfile.TemporaryDirectory() as root, patch("game_runtime_agent_session.time.time", return_value=1000):
+            session = GrokPersistentSession(Path(root), command="fake", source_grok_home=Path(root), logger=lambda _: None)
+            session.start()
+            session.request_deadline_unix_ms = 1006000
+            rpc = session.rpc
+            original = rpc.request
+            waits = []
+            def request(method, params, **kwargs):
+                waits.append(kwargs["timeout"])
+                return original(method, params, **kwargs)
+            rpc.request = request
+            session.generate("one", output_schema={})
+            self.assertEqual(waits, [5.5])
+            session.request_deadline_unix_ms = 999000
+            with self.assertRaisesRegex(TimeoutError, "deadline elapsed"):
+                session.generate("expired", output_schema={})
+            self.assertEqual(waits, [5.5], "Expired work must not issue another prompt.")
+            session.close()
+
+    @patch("game_runtime_grok_acp_session.JsonRpcStdioClient", FakeRpc)
+    def test_model_change_keeps_story_and_forwards_unknown_id(self):
+        with tempfile.TemporaryDirectory() as root:
+            session = GrokPersistentSession(Path(root), command="fake", source_grok_home=Path(root), logger=lambda _: None)
+            session.start()
+            story = session.session_id
+            rpc = session.rpc
+            session._capture_model_options(story, {"configOptions": [{"id": "model", "currentValue": "old"}]})
+            original_request = rpc.request
+            def request(method, params, **kwargs):
+                if method == "session/set_config_option":
+                    rpc.calls.append((method, params))
+                    return {"configOptions": [{"id": "model", "currentValue": params["value"]["value"]}]}
+                return original_request(method, params, **kwargs)
+            rpc.request = request
+            session.generate("one", output_schema={"type": "object"}, model="unlisted-new-model")
+            session.generate("two", output_schema={"type": "object"}, model="unlisted-new-model")
+            self.assertIs(session.rpc, rpc)
+            self.assertEqual(session.session_id, story)
+            changes = [p for m, p in rpc.calls if m == "session/set_config_option"]
+            self.assertEqual(changes, [{"sessionId": story, "configId": "model", "value": {"value": "unlisted-new-model"}}])
+            self.assertEqual(session.last_confirmed_model, "unlisted-new-model")
+            session.close()
+
+    @patch("game_runtime_grok_acp_session.JsonRpcStdioClient", FakeRpc)
+    def test_missing_model_confirmation_retains_selector_without_claiming_applied_model(self):
+        with tempfile.TemporaryDirectory() as root:
+            session = GrokPersistentSession(Path(root), command="fake", source_grok_home=Path(root), logger=lambda _: None)
+            session.start()
+            story = session.session_id
+            rpc = session.rpc
+            session._capture_model_options(story, {"configOptions": [{"id": "model", "currentValue": "old"}]})
+            session.generate("one", output_schema={}, model="custom-id")
+            self.assertEqual(session.last_requested_model, "custom-id")
+            self.assertEqual(session.last_confirmed_model, "")
+            session.generate("two", output_schema={}, model="another-id")
+            self.assertEqual(session.last_confirmed_model, "")
+            self.assertIs(session.rpc, rpc)
+            self.assertEqual(session.session_id, story)
+            changes = [p["value"]["value"] for m, p in rpc.calls if m == "session/set_config_option"]
+            self.assertEqual(changes, ["custom-id", "another-id"])
+            session.close()
+
+    @patch("game_runtime_grok_acp_session.JsonRpcStdioClient", FakeRpc)
+    def test_legacy_model_contract_keeps_session_and_forwards_unlisted_id(self):
+        with tempfile.TemporaryDirectory() as root:
+            session = GrokPersistentSession(Path(root), command="fake", source_grok_home=Path(root), logger=lambda _: None)
+            session.start()
+            story = session.session_id
+            rpc = session.rpc
+            session._capture_model_options(story, {"models": {"currentModelId": "grok-4.7", "availableModels": []}})
+            original = rpc.request
+            def request(method, params, **kwargs):
+                if method == "session/set_model":
+                    rpc.calls.append((method, params))
+                    return {"_meta": {"model": {"Ok": params["modelId"]}}}
+                return original(method, params, **kwargs)
+            rpc.request = request
+            session.generate("one", output_schema={}, model="future-model")
+            session.generate("two", output_schema={}, model="future-model")
+            self.assertEqual(session.last_confirmed_model, "future-model")
+            self.assertEqual(session.session_id, story)
+            self.assertIs(session.rpc, rpc)
+            self.assertEqual([p for m, p in rpc.calls if m == "session/set_model"],
+                             [{"sessionId": story, "modelId": "future-model"}])
+            def reject(method, params, **kwargs):
+                if method == "session/set_model":
+                    raise RuntimeError("session/set_model failed (-32602): Invalid params")
+                return original(method, params, **kwargs)
+            rpc.request = reject
+            with self.assertRaisesRegex(RuntimeError, "Invalid params"):
+                session.generate("bad", output_schema={}, model="invalid-id")
+            self.assertEqual(session.last_confirmed_model, "")
+            self.assertEqual(session.session_id, story)
+            session.generate("restored", output_schema={}, model="future-model")
+            self.assertEqual(session.last_confirmed_model, "future-model")
+            session.close()
+
+    @patch("game_runtime_grok_acp_session.JsonRpcStdioClient", FakeRpc)
+    def test_unsupported_selection_does_not_send_prompt_or_replace_story(self):
+        with tempfile.TemporaryDirectory() as root:
+            session = GrokPersistentSession(Path(root), command="fake", source_grok_home=Path(root), logger=lambda _: None)
+            session.start()
+            story = session.session_id
+            with self.assertRaisesRegex(RuntimeError, "does not advertise"):
+                session.generate("one", output_schema={}, model="unlisted")
+            self.assertEqual(session.session_id, story)
+            self.assertFalse(any(m == "session/prompt" for m, _ in session.rpc.calls))
+            session.generate("default", output_schema={})
+            session.close()
+
     def test_legacy_conversation_is_copied_without_overwriting_shared_history(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

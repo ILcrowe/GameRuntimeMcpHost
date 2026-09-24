@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 from urllib.parse import quote
 
-from game_runtime_agent_session import JsonRpcStdioClient, extract_json_object, ProviderSessionDescriptor, AppendOnlyConversationStream
+from game_runtime_agent_session import JsonRpcStdioClient, extract_json_object, ProviderSessionDescriptor, AppendOnlyConversationStream, remaining_request_timeout
 from game_runtime_grok_session import GrokHeadlessSession
 
 
@@ -27,6 +27,13 @@ class GrokPersistentSession(GrokHeadlessSession):
             self.logger = lambda message: print(f"[Grok ACP] {message}", flush=True)
         self.rpc = None
         self.loaded_session_ids = set()
+        self.session_model_options = {}
+        self.last_requested_model = ""
+        self.last_confirmed_model = ""
+        self.request_deadline_unix_ms = None
+
+    def _request_timeout(self, maximum):
+        return remaining_request_timeout(self.request_deadline_unix_ms, maximum)
 
     def _migrate_saved_session(self, scope_root, session_id):
         """Copy only the selected legacy conversation; never overwrite a newer copy."""
@@ -54,8 +61,9 @@ class GrokPersistentSession(GrokHeadlessSession):
         session_id = descriptor.read_id(self.provider_name)
         if session_id and session_id not in self.loaded_session_ids:
             self._migrate_saved_session(root, session_id)
-            self.rpc.request("session/load", {"sessionId": session_id,
-                "cwd": str(self.workspace), "mcpServers": []}, timeout=30)
+            loaded = self.rpc.request("session/load", {"sessionId": session_id,
+                "cwd": str(self.workspace), "mcpServers": []}, timeout=self._request_timeout(30))
+            self._capture_model_options(session_id, loaded)
         if not session_id:
             session_id = self._new_session()
             descriptor.write_id(self.provider_name, session_id)
@@ -76,6 +84,7 @@ class GrokPersistentSession(GrokHeadlessSession):
             self.rpc.close()
         self.utility_session_ids.clear()
         self.loaded_session_ids.clear()
+        self.session_model_options.clear()
         command = [self.command, "--no-auto-update", "agent", "--no-leader"]
         if self.model:
             command.extend(["--model", self.model])
@@ -92,7 +101,7 @@ class GrokPersistentSession(GrokHeadlessSession):
                 "_meta": {"clientType": "storyllm-master", "clientVersion": "1",
                           "startupHints": {"nonInteractive": True, "skipGitStatus": True, "skipProjectLayout": True},
                           "systemPromptOverride": self.system_prompt},
-            }, timeout=30)
+            }, timeout=self._request_timeout(30))
             methods = {m.get("id") for m in init.get("authMethods", [])}
             if "cached_token" in methods:
                 auth_method = "cached_token"
@@ -106,7 +115,9 @@ class GrokPersistentSession(GrokHeadlessSession):
                 available = ", ".join(sorted(method for method in methods if method)) or "none"
                 raise RuntimeError(f"Grok exposes no supported authentication method (available: {available}).")
             try:
-                self.rpc.request("authenticate", {"methodId": auth_method, "_meta": {"headless": True}}, timeout=30)
+                self.rpc.request("authenticate", {"methodId": auth_method, "_meta": {"headless": True}}, timeout=self._request_timeout(30))
+            except TimeoutError:
+                raise
             except Exception as exc:
                 if auth_method == "grok.com":
                     raise RuntimeError(
@@ -119,8 +130,9 @@ class GrokPersistentSession(GrokHeadlessSession):
                 # Never silently replace a saved story with an empty conversation.
                 if not (init.get("agentCapabilities") or {}).get("loadSession"):
                     raise RuntimeError("Grok cannot restore the saved story session.")
-                self.rpc.request("session/load", {"sessionId": self.grok_session_id,
-                    "cwd": str(self.workspace), "mcpServers": []}, timeout=30)
+                loaded = self.rpc.request("session/load", {"sessionId": self.grok_session_id,
+                    "cwd": str(self.workspace), "mcpServers": []}, timeout=self._request_timeout(30))
+                self._capture_model_options(self.grok_session_id, loaded)
             else:
                 self.grok_session_id = self._new_session()
                 self.descriptor.write_id(self.provider_name, self.grok_session_id)
@@ -132,17 +144,77 @@ class GrokPersistentSession(GrokHeadlessSession):
             raise
 
     def _new_session(self):
-        result = self.rpc.request("session/new", {"cwd": str(self.workspace), "mcpServers": []}, timeout=30)
+        result = self.rpc.request("session/new", {"cwd": str(self.workspace), "mcpServers": []}, timeout=self._request_timeout(30))
         session_id = str(result.get("sessionId") or "")
         if not session_id:
             raise RuntimeError("Grok returned no session ID.")
+        self._capture_model_options(session_id, result)
         return session_id
 
-    def _generate(self, prompt, output_schema, channel=""):
+    def _capture_model_options(self, session_id, result):
+        legacy = result.get("models")
+        if "configOptions" not in result and isinstance(legacy, dict):
+            self.session_model_options[session_id] = {
+                "id": "model", "currentValue": legacy.get("currentModelId"),
+                "transport": "session/set_model",
+            }
+            return
+        if "configOptions" not in result:
+            # Missing confirmation is not a capability revocation. Retain the
+            # advertised selector, but discard its now potentially stale value.
+            previous = self.session_model_options.get(session_id)
+            if previous is not None:
+                self.session_model_options[session_id] = {**previous, "currentValue": None}
+            return
+        self.session_model_options[session_id] = next(
+            (option for option in (result.get("configOptions") or [])
+             if option.get("id") == "model" or option.get("category") == "model"), None)
+
+    def _apply_model(self, session_id, model):
+        requested = str(model or self.model or "").strip()
+        self.last_requested_model = requested
+        option = self.session_model_options.get(session_id)
+        current = (option or {}).get("currentValue")
+        if isinstance(current, dict):
+            current = current.get("value")
+        self.last_confirmed_model = current if isinstance(current, str) else ""
+        if not requested or requested == self.last_confirmed_model:
+            return
+        # A cached session model is not confirmation of this change request.
+        self.last_confirmed_model = ""
+        if not option:
+            raise RuntimeError("Grok does not advertise in-session model selection. Update Grok Build or select provider default; the saved conversation was preserved.")
+        # Do not allow-list locally: the provider validates newly released/custom IDs.
+        if option.get("transport") == "session/set_model":
+            result = self.rpc.request("session/set_model", {
+                "sessionId": session_id, "modelId": requested,
+            }, timeout=self._request_timeout(30))
+            model_result = (result.get("_meta") or {}).get("model") or {}
+            if isinstance(model_result, dict) and model_result.get("Err"):
+                raise RuntimeError("Grok model change failed: " + str(model_result["Err"]))
+            reported = model_result.get("Ok") if isinstance(model_result, dict) else None
+            self.session_model_options[session_id] = {**option, "currentValue": reported}
+        else:
+            result = self.rpc.request("session/set_config_option", {
+                "sessionId": session_id, "configId": option.get("id") or "model",
+                "value": {"value": requested},
+            }, timeout=self._request_timeout(30))
+            self._capture_model_options(session_id, result)
+        confirmed = (self.session_model_options.get(session_id) or {}).get("currentValue")
+        if isinstance(confirmed, dict):
+            confirmed = confirmed.get("value")
+        self.last_confirmed_model = confirmed if isinstance(confirmed, str) else ""
+        if self.last_confirmed_model and self.last_confirmed_model != requested:
+            raise RuntimeError(f"Grok model mismatch: requested {requested}, reported {self.last_confirmed_model}.")
+
+    def _generate(self, prompt, output_schema, channel="", model=None):
+        self.last_requested_model = str(model or self.model or "").strip()
+        self.last_confirmed_model = ""
         self.start()
         if channel and channel not in self.utility_session_ids:
             self.utility_session_ids[channel] = self._new_session()
         session_id = self.utility_session_ids[channel] if channel else self.grok_session_id
+        self._apply_model(session_id, model)
         chunks = []
 
         def receive(message):
@@ -160,7 +232,7 @@ class GrokPersistentSession(GrokHeadlessSession):
         try:
             result = self.rpc.request("session/prompt", {"sessionId": session_id,
                 "prompt": [{"type": "text", "text": prompt + "\nReturn only a JSON object matching this schema:\n" + json.dumps(output_schema, ensure_ascii=False)}]},
-                timeout=self.timeout_seconds, notification_handler=receive)
+                timeout=self._request_timeout(self.timeout_seconds), notification_handler=receive)
             if result.get("stopReason") != "end_turn":
                 raise RuntimeError(f"Grok did not complete its response: {result.get('stopReason')}")
             generated = extract_json_object("".join(chunks))
@@ -179,10 +251,10 @@ class GrokPersistentSession(GrokHeadlessSession):
         return generated
 
     def generate(self, prompt, *, output_schema, **kwargs):
-        return self._generate(prompt, output_schema)
+        return self._generate(prompt, output_schema, model=kwargs.get("model"))
 
     def generate_utility(self, channel, prompt, *, output_schema, **kwargs):
-        return self._generate(prompt, output_schema, channel or "utility")
+        return self._generate(prompt, output_schema, channel or "utility", model=kwargs.get("model"))
 
     def close(self):
         if self.rpc is not None:

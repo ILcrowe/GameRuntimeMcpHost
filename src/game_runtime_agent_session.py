@@ -14,6 +14,16 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+def remaining_request_timeout(deadline_unix_ms, maximum_seconds):
+    """Bound provider work by the game's remaining request lifetime."""
+    if not deadline_unix_ms:
+        return maximum_seconds
+    remaining = float(deadline_unix_ms) / 1000.0 - time.time() - 0.5
+    if remaining <= 0:
+        raise TimeoutError("Game request deadline elapsed before provider work could finish.")
+    return min(maximum_seconds, remaining)
+
+
 class RpcError(RuntimeError):
     """JSON-RPC error returned by an external provider process."""
 

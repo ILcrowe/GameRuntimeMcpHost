@@ -101,6 +101,73 @@ class FakeRpc:
 
 
 class CodexPersistentSessionTests(unittest.TestCase):
+    def test_failed_resume_preserves_story_and_retry_uses_same_id(self):
+        for error in (
+            module.RpcError("thread/resume", {"code": -32602, "message": "model unavailable"}),
+            TimeoutError("resume timed out"),
+            RuntimeError("connection closed"),
+        ):
+            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as temp, patch.object(
+                module, "JsonRpcStdioClient", FakeRpc
+            ):
+                session = module.CodexPersistentSession(Path(temp), command="codex")
+                session.descriptor.write_id("codex", "thr-saved-story")
+                original = FakeRpc.request
+                def reject_resume(rpc, method, *args, **kwargs):
+                    if method == "thread/resume":
+                        rpc.calls.append((method, args[0] if args else None))
+                        raise error
+                    return original(rpc, method, *args, **kwargs)
+                with patch.object(FakeRpc, "request", reject_resume):
+                    with self.assertRaises(type(error)):
+                        session.start("invalid-model", "low")
+                failed_rpc = FakeRpc.instances[-1]
+                self.assertNotIn("thread/start", [method for method, _ in failed_rpc.calls])
+                self.assertFalse(failed_rpc.is_running)
+                self.assertIsNone(session.rpc)
+                self.assertEqual(session.session_id, "")
+                self.assertEqual(session.descriptor.read_id("codex"), "thr-saved-story")
+                session.generate("retry", output_schema={}, model="valid-model", reasoning_effort="low")
+                self.assertEqual(session.session_id, "thr-saved-story")
+                self.assertNotIn("thread/start", [method for method, _ in session.rpc.calls])
+                session.close()
+
+    def test_resume_cannot_replace_saved_id(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", FakeRpc):
+            session = module.CodexPersistentSession(Path(temp), command="codex")
+            session.descriptor.write_id("codex", "thr-saved-story")
+            original = FakeRpc.request
+            def wrong_thread(rpc, method, *args, **kwargs):
+                if method == "thread/resume":
+                    return {"thread": {"id": "thr-unrelated"}}
+                return original(rpc, method, *args, **kwargs)
+            with patch.object(FakeRpc, "request", wrong_thread):
+                with self.assertRaisesRegex(RuntimeError, "different thread"):
+                    session.start("model", "low")
+            self.assertEqual(session.descriptor.read_id("codex"), "thr-saved-story")
+            self.assertIsNone(session.rpc)
+            session.close()
+
+    def test_model_receipt_uses_turn_metadata_and_clears_previous_confirmation(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", FakeRpc):
+            session = module.CodexPersistentSession(Path(temp), command="codex")
+            session.start("first", "low")
+            original = session.rpc.request
+            def request(method, *args, **kwargs):
+                result = original(method, *args, **kwargs)
+                if method == "turn/start":
+                    result["turn"]["model"] = "reported-model"
+                return result
+            session.rpc.request = request
+            session.generate("one", output_schema={}, model="requested-model", reasoning_effort="low")
+            self.assertEqual(session.last_requested_model, "requested-model")
+            self.assertEqual(session.last_confirmed_model, "reported-model")
+            session.rpc.request = original
+            session.generate_utility("diagnostic", "two", output_schema={}, model="new-model", reasoning_effort="low")
+            self.assertEqual(session.last_requested_model, "new-model")
+            self.assertEqual(session.last_confirmed_model, "")
+            session.close()
+
     def test_two_primary_turns_reuse_one_thread(self):
         FakeRpc.instances.clear()
         with tempfile.TemporaryDirectory() as temp, patch.object(

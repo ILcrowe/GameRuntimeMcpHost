@@ -51,6 +51,8 @@ class CodexPersistentSession:
         self.client_title = client_title
         self.rpc: JsonRpcStdioClient | None = None
         self.thread_id = ""
+        self.last_requested_model = ""
+        self.last_confirmed_model = ""
         self.utility_thread_ids: dict[str, str] = {}
         self.descriptor = ProviderSessionDescriptor(self.state_root / "provider_sessions.json")
         self.memory_stream = AppendOnlyConversationStream(
@@ -75,6 +77,7 @@ class CodexPersistentSession:
             return
         if self.rpc is not None:
             self.rpc.close()
+        self.thread_id = ""
         self.utility_thread_ids.clear()
         self.rpc = JsonRpcStdioClient(
             [self.command, "app-server", "--listen", "stdio://"],
@@ -105,9 +108,17 @@ class CodexPersistentSession:
                     {"threadId": stored, **common},
                     timeout=30,
                 )
-                self.thread_id = str((response.get("thread") or {}).get("id") or stored)
+                resumed_id = str((response.get("thread") or {}).get("id") or stored)
+                if resumed_id != stored:
+                    raise RuntimeError("Codex resumed a different thread; stored story session was preserved")
+                self.thread_id = resumed_id
             except (RpcError, TimeoutError, RuntimeError):
                 self.thread_id = ""
+                self.rpc.close()
+                self.rpc = None
+                # A failed resume is not permission to replace the saved story.
+                # Surface the original failure and allow a later retry of its ID.
+                raise
 
         if not self.thread_id:
             response = self.rpc.request("thread/start", common, timeout=30)
@@ -182,6 +193,9 @@ class CodexPersistentSession:
             notification_handler=on_message,
         )
         turn_id = str((response.get("turn") or {}).get("id") or "")
+        reported_model = (response.get("turn") or {}).get("model")
+        if isinstance(reported_model, str):
+            self.last_confirmed_model = reported_model
         if not turn_id:
             raise RuntimeError("Codex turn/start did not return a turn id")
 
@@ -204,6 +218,8 @@ class CodexPersistentSession:
             raise
 
         turn = (completed.get("params") or {}).get("turn") or {}
+        if isinstance(turn.get("model"), str):
+            self.last_confirmed_model = turn["model"]
         status = str(turn.get("status") or "")
         if status != "completed":
             error = turn.get("error") or {}
@@ -238,6 +254,8 @@ class CodexPersistentSession:
         model: str,
         reasoning_effort: str,
     ) -> dict[str, Any]:
+        self.last_requested_model = model
+        self.last_confirmed_model = ""
         self.start(model, reasoning_effort)
         return self._generate_on_thread(
             self.thread_id,
@@ -257,6 +275,8 @@ class CodexPersistentSession:
         model: str,
         reasoning_effort: str,
     ) -> dict[str, Any]:
+        self.last_requested_model = model
+        self.last_confirmed_model = ""
         thread_id = self._get_utility_thread(
             channel,
             model=model,
