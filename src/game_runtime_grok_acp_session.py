@@ -31,6 +31,7 @@ class GrokPersistentSession(GrokHeadlessSession):
         self.last_requested_model = ""
         self.last_confirmed_model = ""
         self.request_deadline_unix_ms = None
+        self.request_wait_check = None
 
     def _request_timeout(self, maximum):
         return remaining_request_timeout(self.request_deadline_unix_ms, maximum)
@@ -232,7 +233,8 @@ class GrokPersistentSession(GrokHeadlessSession):
         try:
             result = self.rpc.request("session/prompt", {"sessionId": session_id,
                 "prompt": [{"type": "text", "text": prompt + "\nReturn only a JSON object matching this schema:\n" + json.dumps(output_schema, ensure_ascii=False)}]},
-                timeout=self._request_timeout(self.timeout_seconds), notification_handler=receive)
+                timeout=self._request_timeout(self.timeout_seconds), notification_handler=receive,
+                wait_check=self.request_wait_check)
             if result.get("stopReason") != "end_turn":
                 raise RuntimeError(f"Grok did not complete its response: {result.get('stopReason')}")
             generated = extract_json_object("".join(chunks))

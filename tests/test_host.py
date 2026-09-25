@@ -39,6 +39,18 @@ MANIFEST = {
 
 
 class RuntimeClientTests(unittest.TestCase):
+    def test_status_poll_timeout_reaches_http_and_default_stays_twelve_seconds(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "session.json"
+            path.write_text(json.dumps({"endpoint": "http://127.0.0.1:18761", "token": "test"}), encoding="utf-8")
+            client = DiscoveringRuntimeClient(Path(temp), "session.json", None)
+            with patch("game_runtime_mcp_host.discover_session_file", return_value=path), patch("game_runtime_mcp_host._RUNTIME_OPENER.open") as opened:
+                opened.return_value.__enter__.return_value.read.return_value = b'{"ok":true,"result":{}}'
+                client.call("master.get_request", {"requestId": "one"}, timeout_seconds=0.5)
+                self.assertEqual(opened.call_args.kwargs["timeout"], 0.5)
+                client.call("master.get_pending", {})
+                self.assertEqual(opened.call_args.kwargs["timeout"], 12)
+
     def test_runtime_redirects_are_rejected(self):
         request = urllib.request.Request(
             "http://127.0.0.1:43121/rpc",

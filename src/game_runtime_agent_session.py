@@ -160,7 +160,10 @@ class JsonRpcStdioClient:
         *,
         timeout: float = 30.0,
         notification_handler: Callable[[dict[str, Any]], None] | None = None,
+        wait_check: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
+        if wait_check is not None:
+            wait_check()
         if not self.is_running:
             self.start()
         self._request_id += 1
@@ -174,10 +177,17 @@ class JsonRpcStdioClient:
 
         deadline = time.monotonic() + max(0.1, timeout)
         while True:
+            if wait_check is not None:
+                wait_check()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError(f"{self.name} {method} timed out")
-            message = self._next_message(remaining)
+            try:
+                message = self._next_message(min(remaining, 0.25) if wait_check else remaining)
+            except TimeoutError:
+                if wait_check is None:
+                    raise
+                continue
             if message.get("id") == request_id and (
                 "result" in message or "error" in message
             ):

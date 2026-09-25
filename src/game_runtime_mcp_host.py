@@ -334,7 +334,7 @@ class RuntimeClient:
         if current_mtime_ns != self.session_mtime_ns:
             self._reload_session()
 
-    def call(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def call(self, command: str, payload: dict[str, Any], *, timeout_seconds: float = 12) -> dict[str, Any]:
         self._reload_session_if_changed()
         body = json.dumps(
             {"protocol": 1, "command": command, "payload": payload},
@@ -349,7 +349,7 @@ class RuntimeClient:
             },
             method="POST",
         )
-        with _RUNTIME_OPENER.open(request, timeout=12) as response:
+        with _RUNTIME_OPENER.open(request, timeout=timeout_seconds) as response:
             return json.loads(response.read().decode("utf-8"))
 
 
@@ -370,7 +370,7 @@ class DiscoveringRuntimeClient:
         self.session_file: Path | None = None
         self.client: RuntimeClient | None = None
 
-    def call(self, command: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def call(self, command: str, payload: dict[str, Any], *, timeout_seconds: float = 12) -> dict[str, Any]:
         session_file = discover_session_file(
             self.local_low_root,
             self.session_name,
@@ -381,7 +381,7 @@ class DiscoveringRuntimeClient:
         if self.client is None or session_file != self.session_file:
             self.session_file = session_file
             self.client = RuntimeClient(session_file)
-        return self.client.call(command, payload)
+        return self.client.call(command, payload, timeout_seconds=timeout_seconds)
 
 
 class McpHost:

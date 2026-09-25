@@ -42,6 +42,32 @@ class FakeRpc:
 
 
 class PersistentSessionTests(unittest.TestCase):
+    @patch("game_runtime_grok_acp_session.JsonRpcStdioClient", FakeRpc)
+    def test_game_closed_wait_cancels_and_discards_transport(self):
+        with tempfile.TemporaryDirectory() as root:
+            session = GrokPersistentSession(Path(root), command="fake", source_grok_home=Path(root), logger=lambda _: None)
+            session.start()
+            rpc = session.rpc
+            original = rpc.request
+            notifications = []
+            rpc.notify = lambda method, params: notifications.append((method, params))
+            def request(method, params, **kwargs):
+                if method == "session/prompt":
+                    kwargs["wait_check"]()
+                return original(method, params, **kwargs)
+            rpc.request = request
+            def cancelled():
+                raise RuntimeError("game cancelled")
+            session.request_wait_check = cancelled
+            with self.assertRaisesRegex(RuntimeError, "game cancelled"):
+                session.generate("one", output_schema={})
+            self.assertEqual(notifications, [("session/cancel", {"sessionId": session.session_id})])
+            self.assertIsNone(session.rpc)
+            self.assertFalse(rpc.is_running)
+            session.request_wait_check = None
+            self.assertEqual(session.generate("next", output_schema={}), {"answer": "ok"})
+            session.close()
+
     def setUp(self):
         FakeRpc.instances.clear()
         FakeRpc.auth_methods = [{"id": "cached_token"}]

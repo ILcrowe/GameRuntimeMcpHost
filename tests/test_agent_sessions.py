@@ -4,6 +4,8 @@ import json
 import sys
 import tempfile
 import unittest
+import time
+from unittest.mock import Mock
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src"
@@ -44,6 +46,30 @@ class _QueueRunner:
 
 
 class AgentSessionPrimitiveTests(unittest.TestCase):
+    def test_silent_provider_can_be_cancelled_without_waiting_for_deadline(self):
+        client = _CapturingRpcClient()
+        client.process = Mock()
+        client.process.poll.return_value = None
+        calls = []
+        def check():
+            calls.append(True)
+            if len(calls) == 3:
+                raise RuntimeError("game cancelled")
+        started = time.monotonic()
+        with self.assertRaisesRegex(RuntimeError, "game cancelled"):
+            client.request("session/prompt", {}, timeout=30, wait_check=check)
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(len(client.writes), 1)
+
+    def test_checked_wait_keeps_normal_reply_and_deadline(self):
+        client = _CapturingRpcClient()
+        client.process = Mock()
+        client.process.poll.return_value = None
+        client._messages.put({"id": 1, "result": {"ok": True}})
+        self.assertEqual(client.request("test", wait_check=lambda: None), {"ok": True})
+        with self.assertRaises(TimeoutError):
+            client.request("test", timeout=0.1, wait_check=lambda: None)
+
     def test_acp_permission_request_is_rejected(self):
         client = _CapturingRpcClient()
         client._handle_unsolicited(
