@@ -41,6 +41,7 @@ class CodexPersistentSession:
         base_instructions: str | None = None,
         thread_config: dict[str, Any] | None = None,
         disable_mcp_servers: bool = False,
+        stateless_utility_channels: tuple[str, ...] = (),
     ):
         self.state_root = Path(state_root).resolve()
         self.state_root.mkdir(parents=True, exist_ok=True)
@@ -57,6 +58,9 @@ class CodexPersistentSession:
         self.base_instructions = base_instructions
         self.thread_config = copy.deepcopy(thread_config or {})
         self.disable_mcp_servers = disable_mcp_servers
+        self.stateless_utility_channels = frozenset(
+            channel.strip().lower() for channel in stateless_utility_channels
+        )
         self.disabled_mcp_server_names: list[str] = []
         self.rpc: JsonRpcStdioClient | None = None
         self.thread_id = ""
@@ -182,19 +186,22 @@ class CodexPersistentSession:
     ) -> str:
         self.start(model, reasoning_effort)
         utility_key = (channel or "utility").strip().lower() or "utility"
-        existing = self.utility_thread_ids.get(utility_key)
+        stateless = utility_key in self.stateless_utility_channels
+        existing = None if stateless else self.utility_thread_ids.get(utility_key)
         if existing:
             return existing
         assert self.rpc is not None
         response = self.rpc.request(
             "thread/start",
-            self._common_thread_params(model, reasoning_effort),
+            {**self._common_thread_params(model, reasoning_effort),
+             **({"ephemeral": True} if stateless else {})},
             timeout=30,
         )
         thread_id = str((response.get("thread") or {}).get("id") or "").strip()
         if not thread_id:
             raise RuntimeError("Codex app-server did not return a utility thread id")
-        self.utility_thread_ids[utility_key] = thread_id
+        if not stateless:
+            self.utility_thread_ids[utility_key] = thread_id
         return thread_id
 
     def _generate_on_thread(
@@ -374,15 +381,27 @@ class CodexPersistentSession:
             model=model,
             reasoning_effort=reasoning_effort,
         )
-        return self._generate_on_thread(
-            thread_id,
-            prompt,
-            output_schema=output_schema,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            event_type="utility-turn",
-            channel=channel,
-        )
+        try:
+            return self._generate_on_thread(
+                thread_id,
+                prompt,
+                output_schema=output_schema,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                event_type="utility-turn",
+                channel=channel,
+            )
+        finally:
+            utility_key = (channel or "utility").strip().lower() or "utility"
+            if utility_key in self.stateless_utility_channels and self.rpc is not None:
+                # Unsubscribe even on timeout/invalid output; app-server unloads
+                # after its inactivity grace period. The public request/result
+                # remains in our append-only audit log, never the story checkpoint.
+                try:
+                    self.rpc.request("thread/unsubscribe", {"threadId": thread_id}, timeout=5)
+                except (RpcError, TimeoutError, RuntimeError):
+                    # Cleanup must not hide the original inference result/error.
+                    pass
 
     def close(self) -> None:
         self.utility_thread_ids.clear()

@@ -53,6 +53,8 @@ class FakeRpc:
             return {"thread": {"id": params["threadId"]}}
         if method == "thread/fork":
             return {"thread": {"id": "checkpoint-fork"}}
+        if method == "thread/unsubscribe":
+            return {}
         if method == "turn/start":
             self.turn_index += 1
             return {"turn": {"id": f"turn-{self.turn_index}"}}
@@ -106,6 +108,47 @@ class FakeRpc:
 
 
 class CodexPersistentSessionTests(unittest.TestCase):
+    def test_stateless_interpreter_does_not_accumulate_history_or_replace_story(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", FakeRpc):
+            session = module.CodexPersistentSession(Path(temp), command="codex",
+                stateless_utility_channels=("action-interpreter",))
+            settings = dict(output_schema={"type": "object"}, model="gpt-test", reasoning_effort="low")
+            session.generate("saved story", **settings)
+            source, checkpoint = session.thread_id, session.last_completed_turn_id
+            for action in ("climb", "talk", "climb again"):
+                session.generate_utility("action-interpreter", action, **settings)
+            self.assertEqual(session.thread_id, source)
+            self.assertEqual(session.last_completed_turn_id, checkpoint)
+            self.assertEqual(session.descriptor.read_id("codex"), source)
+            calls = session.rpc.calls
+            turns = [params for method, params in calls if method == "turn/start"]
+            self.assertEqual(len({turn["threadId"] for turn in turns}), 4)
+            ephemeral = [params for method, params in calls if method == "thread/start" and params.get("ephemeral")]
+            self.assertEqual(len(ephemeral), 3)
+            releases = [params["threadId"] for method, params in calls if method == "thread/unsubscribe"]
+            self.assertEqual(releases, [turn["threadId"] for turn in turns[1:]])
+            self.assertNotIn("action-interpreter", session.utility_thread_ids)
+            session.generate_utility("diagnostic", "one", **settings)
+            session.generate_utility("diagnostic", "two", **settings)
+            turns = [params for method, params in calls if method == "turn/start"]
+            self.assertEqual(turns[-2]["threadId"], turns[-1]["threadId"])
+            session.close()
+            records = [json.loads(line) for line in (Path(temp)/"memory-stream"/"external-gm.jsonl").read_text().splitlines()]
+            self.assertEqual(len(records), 6)
+
+    def test_stateless_interpreter_released_after_generation_failure(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", FakeRpc):
+            session = module.CodexPersistentSession(Path(temp), command="codex",
+                stateless_utility_channels=("action-interpreter",))
+            with patch.object(session, "_generate_on_thread", side_effect=ValueError("invalid JSON")):
+                with self.assertRaisesRegex(ValueError, "invalid JSON"):
+                    session.generate_utility("action-interpreter", "check", output_schema={},
+                        model="gpt-test", reasoning_effort="low")
+            releases = [params for method, params in session.rpc.calls if method == "thread/unsubscribe"]
+            self.assertEqual(releases, [{"threadId": "thr-utility-2"}])
+            self.assertEqual(session.thread_id, "thr-current")
+            session.close()
+
     def test_checkpoint_forks_through_saved_turn_without_reverting_source(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", FakeRpc):
             session = module.CodexPersistentSession(Path(temp), command="codex")
