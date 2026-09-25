@@ -232,6 +232,9 @@ class GrokPersistentSession(GrokHeadlessSession):
         self.logger(f"ACP request pid={self.rpc.process.pid} session={session_id} channel={channel or 'story'}")
         try:
             result = self.rpc.request("session/prompt", {"sessionId": session_id,
+                # The game already selects bounded context. ACP's default large-input
+                # offload can drop its middle when this client cannot write/read files.
+                "_meta": {"verbatim": True},
                 "prompt": [{"type": "text", "text": prompt + "\nReturn only a JSON object matching this schema:\n" + json.dumps(output_schema, ensure_ascii=False)}]},
                 timeout=self._request_timeout(self.timeout_seconds), notification_handler=receive,
                 wait_check=self.request_wait_check)
