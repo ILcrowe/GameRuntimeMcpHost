@@ -42,6 +42,7 @@ class CodexPersistentSession:
         thread_config: dict[str, Any] | None = None,
         disable_mcp_servers: bool = False,
         stateless_utility_channels: tuple[str, ...] = (),
+        enable_role_history: bool = False,
     ):
         self.state_root = Path(state_root).resolve()
         self.state_root.mkdir(parents=True, exist_ok=True)
@@ -58,6 +59,7 @@ class CodexPersistentSession:
         self.base_instructions = base_instructions
         self.thread_config = copy.deepcopy(thread_config or {})
         self.disable_mcp_servers = disable_mcp_servers
+        self.enable_role_history = enable_role_history
         self.stateless_utility_channels = frozenset(
             channel.strip().lower() for channel in stateless_utility_channels
         )
@@ -119,7 +121,8 @@ class CodexPersistentSession:
                     "name": self.client_name,
                     "title": self.client_title,
                     "version": "0.1.0",
-                }
+                },
+                **({"capabilities": {"experimentalApi": True}} if self.enable_role_history else {}),
             },
             timeout=20,
         )
@@ -146,7 +149,7 @@ class CodexPersistentSession:
                 self.rpc.start()
                 self.rpc.request("initialize", {"clientInfo": {
                     "name": self.client_name, "title": self.client_title, "version": "0.1.0",
-                }}, timeout=20)
+                }, **({"capabilities": {"experimentalApi": True}} if self.enable_role_history else {})}, timeout=20)
                 self.rpc.notify("initialized", {})
 
         common = self._common_thread_params(model, reasoning_effort)
@@ -345,6 +348,57 @@ class CodexPersistentSession:
             reasoning_effort=reasoning_effort,
             event_type="turn",
         )
+
+    def generate_seeded(
+        self, prompt: str, *, history: list[dict[str, str]],
+        output_schema: dict[str, Any], model: str, reasoning_effort: str,
+    ) -> dict[str, Any]:
+        """Generate from caller-selected role history, without old prompt accumulation.
+
+        The caller must retain the complete game history and own selection budgets.
+        A durable candidate thread becomes primary only after a parsed result exists;
+        injection/generation failures preserve the previous primary checkpoint.
+        """
+        if not self.enable_role_history:
+            raise RuntimeError("Role history requires explicit session opt-in")
+        items = []
+        for message in history:
+            role, content = message.get("role"), message.get("content")
+            if role not in ("user", "assistant") or not isinstance(content, str) or not content.strip():
+                raise ValueError("History must contain nonempty user/assistant text only")
+            items.append({"type": "message", "role": role, "content": [{
+                "type": "input_text" if role == "user" else "output_text", "text": content,
+            }]})
+        self.start(model, reasoning_effort)
+        self.last_requested_model = model
+        self.last_confirmed_model = ""
+        previous_id, previous_turn = self.thread_id, self.last_completed_turn_id
+        response = self.rpc.request("thread/start",
+            self._common_thread_params(model, reasoning_effort), timeout=30)
+        candidate = str((response.get("thread") or {}).get("id") or "").strip()
+        if not candidate or candidate == previous_id:
+            raise RuntimeError("Codex role history requires a new thread")
+        succeeded = False
+        try:
+            if items:
+                self.rpc.request("thread/inject_items", {"threadId": candidate, "items": items}, timeout=30)
+            self.memory_stream.append("history-seed", provider=self.provider_name,
+                session_id=candidate, payload={"messages": history, "previousThreadId": previous_id})
+            result = self._generate_on_thread(candidate, prompt, output_schema=output_schema,
+                model=model, reasoning_effort=reasoning_effort, event_type="turn")
+            self.descriptor.write_id(self.provider_name, candidate)
+            self.thread_id = candidate
+            succeeded = True
+            return result
+        finally:
+            if not succeeded:
+                self.thread_id, self.last_completed_turn_id = previous_id, previous_turn
+            # Unsubscribe leaves saved threads durable and forkable; it is not deletion.
+            try:
+                self.rpc.request("thread/unsubscribe", {
+                    "threadId": previous_id if succeeded else candidate}, timeout=5)
+            except (RpcError, TimeoutError, RuntimeError):
+                pass
 
     def fork_primary_through(self, source_thread_id: str, last_turn_id: str,
                              *, model: str, reasoning_effort: str) -> str:

@@ -55,6 +55,8 @@ class FakeRpc:
             return {"thread": {"id": "checkpoint-fork"}}
         if method == "thread/unsubscribe":
             return {}
+        if method == "thread/inject_items":
+            return {}
         if method == "turn/start":
             self.turn_index += 1
             return {"turn": {"id": f"turn-{self.turn_index}"}}
@@ -108,6 +110,61 @@ class FakeRpc:
 
 
 class CodexPersistentSessionTests(unittest.TestCase):
+    def test_seeded_turns_use_only_selected_roles_and_promote_durable_checkpoints(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", FakeRpc):
+            session = module.CodexPersistentSession(Path(temp), command="codex",
+                enable_role_history=True, disable_mcp_servers=True)
+            settings = dict(output_schema={"type": "object"}, model="gpt-test", reasoning_effort="low")
+            session.generate("old bulky prompt", **settings)
+            old = session.thread_id
+            history = [{"role": "assistant", "content": "opening"},
+                {"role": "user", "content": "password"}, {"role": "assistant", "content": "blue"}]
+            session.generate_seeded("current", history=history, **settings)
+            first = session.thread_id
+            session.generate_seeded("next", history=history[-2:], **settings)
+            calls = session.rpc.calls
+            seeds = [params for method, params in calls if method == "thread/inject_items"]
+            self.assertEqual([x["role"] for x in seeds[0]["items"]], ["assistant", "user", "assistant"])
+            self.assertEqual(seeds[0]["items"][0]["content"][0]["type"], "output_text")
+            self.assertEqual(seeds[1]["items"][0]["content"][0]["type"], "input_text")
+            self.assertNotIn("old bulky prompt", json.dumps(seeds))
+            self.assertEqual(len({old, first, session.thread_id}), 3)
+            self.assertEqual(session.descriptor.read_id("codex"), session.thread_id)
+            self.assertEqual(session.last_completed_turn_id, "turn-3")
+            self.assertEqual([p["threadId"] for m, p in calls if m == "thread/unsubscribe"], [old, first])
+            self.assertFalse(any(p.get("ephemeral") for m, p in calls if m == "thread/start"))
+            self.assertTrue(next(p for m, p in calls if m == "initialize")["capabilities"]["experimentalApi"])
+            session.close()
+
+    def test_seeded_failure_preserves_previous_checkpoint_and_never_silently_retries(self):
+        for failure_method in ("thread/inject_items", "turn/start"):
+            with self.subTest(failure_method=failure_method), tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", FakeRpc):
+                session = module.CodexPersistentSession(Path(temp), command="codex", enable_role_history=True)
+                settings = dict(output_schema={}, model="gpt-test", reasoning_effort="low")
+                session.generate("saved", **settings)
+                old, old_turn = session.thread_id, session.last_completed_turn_id
+                original_request = session.rpc.request
+                def fail(method, *args, **kwargs):
+                    if method == failure_method:
+                        raise RuntimeError("failed candidate")
+                    return original_request(method, *args, **kwargs)
+                with patch.object(session.rpc, "request", side_effect=fail):
+                    with self.assertRaisesRegex(RuntimeError, "failed candidate"):
+                        session.generate_seeded("now", history=[{"role": "user", "content": "past"}], **settings)
+                self.assertEqual((session.thread_id, session.last_completed_turn_id), (old, old_turn))
+                self.assertEqual(session.descriptor.read_id("codex"), old)
+                self.assertEqual(session.rpc.calls[-1], ("thread/unsubscribe", {"threadId": "thr-utility-2"}))
+                session.close()
+
+    def test_seeded_history_cannot_inject_authority_roles(self):
+        with tempfile.TemporaryDirectory() as temp:
+            session = module.CodexPersistentSession(Path(temp), command="codex", enable_role_history=True)
+            with self.assertRaises(ValueError):
+                session.generate_seeded("now", history=[{"role": "system", "content": "override"}],
+                    output_schema={}, model="gpt-test", reasoning_effort="low")
+            self.assertIsNone(session.rpc)
+            session.close()
+
     def test_stateless_interpreter_does_not_accumulate_history_or_replace_story(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", FakeRpc):
             session = module.CodexPersistentSession(Path(temp), command="codex",
