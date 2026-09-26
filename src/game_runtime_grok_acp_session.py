@@ -30,6 +30,7 @@ class GrokPersistentSession(GrokHeadlessSession):
         self.session_model_options = {}
         self.last_requested_model = ""
         self.last_confirmed_model = ""
+        self.last_confirmed_reasoning_effort = ""
         self.request_deadline_unix_ms = None
         self.request_wait_check = None
 
@@ -208,14 +209,49 @@ class GrokPersistentSession(GrokHeadlessSession):
         if self.last_confirmed_model and self.last_confirmed_model != requested:
             raise RuntimeError(f"Grok model mismatch: requested {requested}, reported {self.last_confirmed_model}.")
 
-    def _generate(self, prompt, output_schema, channel="", model=None):
+    def _apply_reasoning_effort(self, session_id, effort):
+        self.last_confirmed_reasoning_effort = ""
+        requested = str(effort or self.reasoning_effort or "").strip()
+        if not requested:
+            return
+
+        def read_settings():
+            loaded = self.rpc.request("session/load", {
+                "sessionId": session_id, "cwd": str(self.workspace), "mcpServers": [],
+            }, timeout=self._request_timeout(30))
+            models = loaded.get("models") or {}
+            current = models.get("currentModelId")
+            meta = next((m.get("_meta") or {} for m in models.get("availableModels", [])
+                         if m.get("modelId") == current), {})
+            return current, meta
+
+        current, meta = read_settings()
+        supported = {item.get("value") for item in meta.get("reasoningEfforts", [])}
+        if not current or not meta.get("supportsReasoningEffort") or requested not in supported:
+            raise RuntimeError("Grok does not advertise the requested reasoning effort for this session.")
+        if meta.get("reasoningEffort") != requested:
+            result = self.rpc.request("session/set_model", {
+                "sessionId": session_id, "modelId": current,
+                "_meta": {"reasoningEffort": requested},
+            }, timeout=self._request_timeout(30))
+            error = ((result.get("_meta") or {}).get("model") or {}).get("Err")
+            if error:
+                raise RuntimeError("Grok reasoning effort change failed: " + str(error))
+            confirmed_model, meta = read_settings()
+            if confirmed_model != current or meta.get("reasoningEffort") != requested:
+                raise RuntimeError("Grok did not confirm the requested model and reasoning effort.")
+        self.last_confirmed_reasoning_effort = requested
+
+    def _generate(self, prompt, output_schema, channel="", model=None, reasoning_effort=None):
         self.last_requested_model = str(model or self.model or "").strip()
         self.last_confirmed_model = ""
+        self.last_confirmed_reasoning_effort = ""
         self.start()
         if channel and channel not in self.utility_session_ids:
             self.utility_session_ids[channel] = self._new_session()
         session_id = self.utility_session_ids[channel] if channel else self.grok_session_id
         self._apply_model(session_id, model)
+        self._apply_reasoning_effort(session_id, reasoning_effort)
         chunks = []
 
         def receive(message):
@@ -256,10 +292,12 @@ class GrokPersistentSession(GrokHeadlessSession):
         return generated
 
     def generate(self, prompt, *, output_schema, **kwargs):
-        return self._generate(prompt, output_schema, model=kwargs.get("model"))
+        return self._generate(prompt, output_schema, model=kwargs.get("model"),
+                              reasoning_effort=kwargs.get("reasoning_effort"))
 
     def generate_utility(self, channel, prompt, *, output_schema, **kwargs):
-        return self._generate(prompt, output_schema, channel or "utility", model=kwargs.get("model"))
+        return self._generate(prompt, output_schema, channel or "utility", model=kwargs.get("model"),
+                              reasoning_effort=kwargs.get("reasoning_effort"))
 
     def close(self):
         if self.rpc is not None:

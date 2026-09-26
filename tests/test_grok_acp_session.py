@@ -43,6 +43,48 @@ class FakeRpc:
 
 class PersistentSessionTests(unittest.TestCase):
     @patch("game_runtime_grok_acp_session.JsonRpcStdioClient", FakeRpc)
+    def test_effort_applies_per_channel_and_requires_confirmation(self):
+        for ignored in (False, True):
+            with self.subTest(ignored=ignored), tempfile.TemporaryDirectory() as root:
+                session = GrokPersistentSession(Path(root), command="fake", source_grok_home=Path(root),
+                                                reasoning_effort="low", logger=lambda _: None)
+                session.start()
+                rpc = session.rpc
+                original = rpc.request
+                efforts = {}
+                def request(method, params, **kwargs):
+                    sid = params.get("sessionId")
+                    if method == "session/load":
+                        rpc.calls.append((method, params))
+                        return {"models": {"currentModelId": "grok-4.7", "availableModels": [
+                            {"modelId": "grok-4.7", "_meta": {"supportsReasoningEffort": True,
+                             "reasoningEffort": efforts.get(sid, "high"),
+                             "reasoningEfforts": [{"value": "low"}, {"value": "high"}]}}]}}
+                    if method == "session/set_model":
+                        rpc.calls.append((method, params))
+                        if not ignored:
+                            efforts[sid] = params["_meta"]["reasoningEffort"]
+                        return {"_meta": {"model": {"Ok": "grok-4.7"}}}
+                    return original(method, params, **kwargs)
+                rpc.request = request
+                if ignored:
+                    with self.assertRaisesRegex(RuntimeError, "did not confirm"):
+                        session.generate("one", output_schema={})
+                    self.assertFalse(any(m == "session/prompt" for m, _ in rpc.calls))
+                    self.assertEqual(session.last_confirmed_reasoning_effort, "")
+                else:
+                    story = session.session_id
+                    session.generate("one", output_schema={})
+                    session.generate_utility("action-interpreter", "two", output_schema={})
+                    session.generate("three", output_schema={})
+                    self.assertEqual(session.session_id, story)
+                    self.assertEqual(session.last_confirmed_reasoning_effort, "low")
+                    changes = [p for m, p in rpc.calls if m == "session/set_model"]
+                    self.assertEqual(len(changes), 2)
+                    self.assertNotEqual(changes[0]["sessionId"], changes[1]["sessionId"])
+                session.close()
+
+    @patch("game_runtime_grok_acp_session.JsonRpcStdioClient", FakeRpc)
     def test_game_closed_wait_cancels_and_discards_transport(self):
         with tempfile.TemporaryDirectory() as root:
             session = GrokPersistentSession(Path(root), command="fake", source_grok_home=Path(root), logger=lambda _: None)
