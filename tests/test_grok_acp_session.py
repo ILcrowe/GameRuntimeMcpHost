@@ -59,7 +59,7 @@ class PersistentSessionTests(unittest.TestCase):
                         return {"models": {"currentModelId": "grok-4.7", "availableModels": [
                             {"modelId": "grok-4.7", "_meta": {"supportsReasoningEffort": True,
                              "reasoningEffort": efforts.get(sid, "high"),
-                             "reasoningEfforts": [{"value": "low"}, {"value": "high"}]}}]}}
+                             "reasoningEfforts": [{"value": "low"}, {"value": "high", "default": True}]}}]}}
                     if method == "session/set_model":
                         rpc.calls.append((method, params))
                         if not ignored:
@@ -82,6 +82,9 @@ class PersistentSessionTests(unittest.TestCase):
                     changes = [p for m, p in rpc.calls if m == "session/set_model"]
                     self.assertEqual(len(changes), 2)
                     self.assertNotEqual(changes[0]["sessionId"], changes[1]["sessionId"])
+                    session.generate("restore default", output_schema={}, reasoning_effort="default")
+                    self.assertEqual(session.last_confirmed_reasoning_effort, "high")
+                    self.assertEqual(session.session_id, story)
                 session.close()
 
     @patch("game_runtime_grok_acp_session.JsonRpcStdioClient", FakeRpc)

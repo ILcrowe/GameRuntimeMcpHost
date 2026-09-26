@@ -226,6 +226,9 @@ class GrokPersistentSession(GrokHeadlessSession):
             return current, meta
 
         current, meta = read_settings()
+        if requested == "default":
+            requested = next((item.get("value") for item in meta.get("reasoningEfforts", [])
+                              if item.get("default") is True), "")
         supported = {item.get("value") for item in meta.get("reasoningEfforts", [])}
         if not current or not meta.get("supportsReasoningEffort") or requested not in supported:
             raise RuntimeError("Grok does not advertise the requested reasoning effort for this session.")
