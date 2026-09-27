@@ -46,6 +46,25 @@ class _QueueRunner:
 
 
 class AgentSessionPrimitiveTests(unittest.TestCase):
+    def test_notification_wait_checks_cancellation_and_keeps_reply_and_deadline(self):
+        client = _CapturingRpcClient()
+        client.process = Mock()
+        client.process.poll.return_value = None
+        calls = []
+        def check():
+            calls.append(True)
+            if len(calls) == 2:
+                raise RuntimeError("game cancelled")
+        started = time.monotonic()
+        with self.assertRaisesRegex(RuntimeError, "game cancelled"):
+            client.wait_for_notification(lambda _: False, timeout=30, wait_check=check)
+        self.assertLess(time.monotonic() - started, 2)
+        client._messages.put({"method": "done"})
+        self.assertEqual(client.wait_for_notification(lambda m: m.get("method") == "done",
+            timeout=1, wait_check=lambda: None), {"method": "done"})
+        with self.assertRaises(TimeoutError):
+            client.wait_for_notification(lambda _: False, timeout=0.1, wait_check=lambda: None)
+
     def test_silent_provider_can_be_cancelled_without_waiting_for_deadline(self):
         client = _CapturingRpcClient()
         client.process = Mock()

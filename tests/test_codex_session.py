@@ -110,6 +110,39 @@ class FakeRpc:
 
 
 class CodexPersistentSessionTests(unittest.TestCase):
+    def test_closed_game_request_interrupts_exact_turn_and_does_not_commit_memory(self):
+        class CancelRpc(FakeRpc):
+            def request(self, method, params=None, **kwargs):
+                if method == "turn/interrupt":
+                    self.calls.append((method, params))
+                    return {}
+                return super().request(method, params, **kwargs)
+
+            def wait_for_notification(self, predicate, **kwargs):
+                kwargs["wait_check"]()
+                raise AssertionError("Closed request must stop waiting")
+
+        with tempfile.TemporaryDirectory() as folder:
+            session = module.CodexPersistentSession(Path(folder), command="fake")
+            try:
+                session.rpc = CancelRpc()
+                checks = []
+                def check():
+                    checks.append(True)
+                    if len(checks) == 2:
+                        raise RuntimeError("game request closed")
+                session.request_wait_check = check
+                with self.assertRaisesRegex(RuntimeError, "game request closed"):
+                    session._generate_on_thread("story-thread", "prompt", output_schema={},
+                        model="fake", reasoning_effort="low", event_type="turn")
+                self.assertEqual(session.rpc.calls[-1], ("turn/interrupt",
+                    {"threadId": "story-thread", "turnId": "turn-1"}))
+                self.assertEqual(session.last_completed_turn_id, "")
+                self.assertEqual((Path(folder) / "memory-stream" / "external-gm.jsonl").read_text(), "")
+            finally:
+                session.close()
+
+
     def test_seeded_turns_use_only_selected_roles_and_promote_durable_checkpoints(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(module, "JsonRpcStdioClient", FakeRpc):
             session = module.CodexPersistentSession(Path(temp), command="codex",

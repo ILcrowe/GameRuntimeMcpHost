@@ -203,13 +203,21 @@ class JsonRpcStdioClient:
         *,
         timeout: float,
         notification_handler: Callable[[dict[str, Any]], None] | None = None,
+        wait_check: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + max(0.1, timeout)
         while True:
+            if wait_check is not None:
+                wait_check()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError(f"{self.name} notification wait timed out")
-            message = self._next_message(remaining)
+            try:
+                message = self._next_message(min(remaining, 0.25) if wait_check else remaining)
+            except TimeoutError:
+                if wait_check is None:
+                    raise
+                continue
             if predicate(message):
                 if notification_handler:
                     notification_handler(message)

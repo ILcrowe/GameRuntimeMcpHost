@@ -72,6 +72,7 @@ class CodexPersistentSession:
         self.utility_thread_ids: dict[str, str] = {}
         # Optional display observer of primary-thread public text. Never reasoning.
         self.on_primary_text = None
+        self.request_wait_check = None
         self.descriptor = ProviderSessionDescriptor(self.state_root / "provider_sessions.json")
         self.memory_stream = AppendOnlyConversationStream(
             self.state_root / "memory-stream" / "external-gm.jsonl"
@@ -256,6 +257,8 @@ class CodexPersistentSession:
                     # Display observers must not invalidate the authoritative result.
                     pass
 
+        if self.request_wait_check is not None:
+            self.request_wait_check()
         response = self.rpc.request(
             "turn/start",
             {
@@ -281,13 +284,15 @@ class CodexPersistentSession:
         early_messages.clear()
 
         try:
+            wait_options = {"wait_check": self.request_wait_check} if self.request_wait_check else {}
             completed = self.rpc.wait_for_notification(
                 lambda message: message.get("method") == "turn/completed"
                 and str(((message.get("params") or {}).get("turn") or {}).get("id") or "") == turn_id,
                 timeout=self.timeout_seconds,
                 notification_handler=on_message,
+                **wait_options,
             )
-        except TimeoutError:
+        except (TimeoutError, RuntimeError):
             try:
                 self.rpc.request(
                     "turn/interrupt",
