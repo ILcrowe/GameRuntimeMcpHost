@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from game_runtime_agent_session import JsonRpcStdioClient, extract_json_object, ProviderSessionDescriptor, AppendOnlyConversationStream, remaining_request_timeout
-from game_runtime_grok_session import GrokHeadlessSession
+from game_runtime_grok_session import GrokHeadlessSession, GrokConsentDenied
 
 
 class GrokPersistentSession(GrokHeadlessSession):
@@ -18,11 +18,11 @@ class GrokPersistentSession(GrokHeadlessSession):
     def __init__(self, *args, **kwargs):
         transport_root = kwargs.pop("transport_root", None)
         super().__init__(*args, **kwargs)
-        if transport_root is not None:
+        if transport_root is not None and kwargs.get("workspace") is None:
             transport_root = Path(transport_root).resolve()
             self.workspace = transport_root / "grok-workspace"
             self.workspace.mkdir(parents=True, exist_ok=True)
-            self.runtime_grok_home = transport_root / "grok-runtime-home"
+            self.legacy_runtime_grok_home = transport_root / "grok-runtime-home"
         if "logger" not in kwargs:
             self.logger = lambda message: print(f"[Grok ACP] {message}", flush=True)
         self.rpc = None
@@ -33,6 +33,25 @@ class GrokPersistentSession(GrokHeadlessSession):
         self.last_confirmed_reasoning_effort = ""
         self.request_deadline_unix_ms = None
         self.request_wait_check = None
+        self._active_prompt_session = None
+
+    def _require_start_consent(self, *, expected_scope=None):
+        self.consent.require_start(expected_scope=str(self.state_root) if expected_scope is None else expected_scope,
+                                   transport="acp")
+
+    def _rpc_request(self, method, params=None, **kwargs):
+        if method == "authenticate":
+            raise PermissionError("이 전송기는 인증을 자동으로 요청하지 않습니다.")
+        self._require_start_consent()
+        previous_check = kwargs.get("wait_check")
+
+        def check_consent():
+            self._require_start_consent()
+            if previous_check is not None:
+                previous_check()
+
+        kwargs["wait_check"] = check_consent
+        return self.rpc.request(method, params, **kwargs)
 
     def _request_timeout(self, maximum):
         return remaining_request_timeout(self.request_deadline_unix_ms, maximum)
@@ -58,12 +77,13 @@ class GrokPersistentSession(GrokHeadlessSession):
         root = Path(scope_root).resolve()
         if root == self.state_root:
             return
+        self._require_start_consent(expected_scope=str(root))
         self.start()
         descriptor = ProviderSessionDescriptor(root / "provider_sessions.json")
         session_id = descriptor.read_id(self.provider_name)
         if session_id and session_id not in self.loaded_session_ids:
             self._migrate_saved_session(root, session_id)
-            loaded = self.rpc.request("session/load", {"sessionId": session_id,
+            loaded = self._rpc_request("session/load", {"sessionId": session_id,
                 "cwd": str(self.workspace), "mcpServers": []}, timeout=self._request_timeout(30))
             self._capture_model_options(session_id, loaded)
         if not session_id:
@@ -82,6 +102,7 @@ class GrokPersistentSession(GrokHeadlessSession):
     def start(self):
         if self.rpc is not None and self.rpc.is_running:
             return
+        self._require_start_consent()
         if self.rpc is not None:
             self.rpc.close()
         self.utility_session_ids.clear()
@@ -97,42 +118,20 @@ class GrokPersistentSession(GrokHeadlessSession):
         )
         try:
             self.rpc.start()
-            init = self.rpc.request("initialize", {
+            init = self._rpc_request("initialize", {
                 "protocolVersion": 1,
                 "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False},
                 "_meta": {"clientType": "storyllm-master", "clientVersion": "1",
                           "startupHints": {"nonInteractive": True, "skipGitStatus": True, "skipProjectLayout": True},
                           "systemPromptOverride": self.system_prompt},
             }, timeout=self._request_timeout(30))
-            methods = {m.get("id") for m in init.get("authMethods", [])}
-            if "cached_token" in methods:
-                auth_method = "cached_token"
-            elif "grok.com" in methods:
-                # Grok CLI 1.0.13 exposes the current OAuth-backed method under this
-                # ID. An already authenticated CLI completes it without a separate
-                # game-owned credential, while an unauthenticated CLI reports the
-                # login requirement below.
-                auth_method = "grok.com"
-            else:
-                available = ", ".join(sorted(method for method in methods if method)) or "none"
-                raise RuntimeError(f"Grok exposes no supported authentication method (available: {available}).")
-            try:
-                self.rpc.request("authenticate", {"methodId": auth_method, "_meta": {"headless": True}}, timeout=self._request_timeout(30))
-            except TimeoutError:
-                raise
-            except Exception as exc:
-                if auth_method == "grok.com":
-                    raise RuntimeError(
-                        "Grok CLI authentication is required or expired. "
-                        "Sign in on this machine with `grok login --oauth` (or `grok login --device-auth`), "
-                        "then reconnect from the game.") from exc
-                raise
+            # authMethods 광고만으로 인증을 요청하지 않습니다. 이 단계의 자동 authenticate는 제거됐습니다.
             if self.grok_session_id:
                 self._migrate_saved_session(self.state_root, self.grok_session_id)
                 # Never silently replace a saved story with an empty conversation.
                 if not (init.get("agentCapabilities") or {}).get("loadSession"):
                     raise RuntimeError("Grok cannot restore the saved story session.")
-                loaded = self.rpc.request("session/load", {"sessionId": self.grok_session_id,
+                loaded = self._rpc_request("session/load", {"sessionId": self.grok_session_id,
                     "cwd": str(self.workspace), "mcpServers": []}, timeout=self._request_timeout(30))
                 self._capture_model_options(self.grok_session_id, loaded)
             else:
@@ -146,7 +145,7 @@ class GrokPersistentSession(GrokHeadlessSession):
             raise
 
     def _new_session(self):
-        result = self.rpc.request("session/new", {"cwd": str(self.workspace), "mcpServers": []}, timeout=self._request_timeout(30))
+        result = self._rpc_request("session/new", {"cwd": str(self.workspace), "mcpServers": []}, timeout=self._request_timeout(30))
         session_id = str(result.get("sessionId") or "")
         if not session_id:
             raise RuntimeError("Grok returned no session ID.")
@@ -188,7 +187,7 @@ class GrokPersistentSession(GrokHeadlessSession):
             raise RuntimeError("Grok does not advertise in-session model selection. Update Grok Build or select provider default; the saved conversation was preserved.")
         # Do not allow-list locally: the provider validates newly released/custom IDs.
         if option.get("transport") == "session/set_model":
-            result = self.rpc.request("session/set_model", {
+            result = self._rpc_request("session/set_model", {
                 "sessionId": session_id, "modelId": requested,
             }, timeout=self._request_timeout(30))
             model_result = (result.get("_meta") or {}).get("model") or {}
@@ -197,7 +196,7 @@ class GrokPersistentSession(GrokHeadlessSession):
             reported = model_result.get("Ok") if isinstance(model_result, dict) else None
             self.session_model_options[session_id] = {**option, "currentValue": reported}
         else:
-            result = self.rpc.request("session/set_config_option", {
+            result = self._rpc_request("session/set_config_option", {
                 "sessionId": session_id, "configId": option.get("id") or "model",
                 "value": {"value": requested},
             }, timeout=self._request_timeout(30))
@@ -216,7 +215,7 @@ class GrokPersistentSession(GrokHeadlessSession):
             return
 
         def read_settings():
-            loaded = self.rpc.request("session/load", {
+            loaded = self._rpc_request("session/load", {
                 "sessionId": session_id, "cwd": str(self.workspace), "mcpServers": [],
             }, timeout=self._request_timeout(30))
             models = loaded.get("models") or {}
@@ -233,7 +232,7 @@ class GrokPersistentSession(GrokHeadlessSession):
         if not current or not meta.get("supportsReasoningEffort") or requested not in supported:
             raise RuntimeError("Grok does not advertise the requested reasoning effort for this session.")
         if meta.get("reasoningEffort") != requested:
-            result = self.rpc.request("session/set_model", {
+            result = self._rpc_request("session/set_model", {
                 "sessionId": session_id, "modelId": current,
                 "_meta": {"reasoningEffort": requested},
             }, timeout=self._request_timeout(30))
@@ -246,6 +245,7 @@ class GrokPersistentSession(GrokHeadlessSession):
         self.last_confirmed_reasoning_effort = requested
 
     def _generate(self, prompt, output_schema, channel="", model=None, reasoning_effort=None):
+        self._require_start_consent()
         self.last_requested_model = str(model or self.model or "").strip()
         self.last_confirmed_model = ""
         self.last_confirmed_reasoning_effort = ""
@@ -270,7 +270,8 @@ class GrokPersistentSession(GrokHeadlessSession):
         started = time.monotonic()
         self.logger(f"ACP request pid={self.rpc.process.pid} session={session_id} channel={channel or 'story'}")
         try:
-            result = self.rpc.request("session/prompt", {"sessionId": session_id,
+            self._active_prompt_session = session_id
+            result = self._rpc_request("session/prompt", {"sessionId": session_id,
                 # The game already selects bounded context. ACP's default large-input
                 # offload can drop its middle when this client cannot write/read files.
                 "_meta": {"verbatim": True},
@@ -280,6 +281,11 @@ class GrokPersistentSession(GrokHeadlessSession):
             if result.get("stopReason") != "end_turn":
                 raise RuntimeError(f"Grok did not complete its response: {result.get('stopReason')}")
             generated = extract_json_object("".join(chunks))
+        except GrokConsentDenied:
+            # 취소된 새 요청은 수락하지 않으며 기존 프로세스와 공급자 세션 기록은 보존합니다.
+            if self._active_prompt_session is not None:
+                self.rpc.notify("session/cancel", {"sessionId": self._active_prompt_session})
+            raise
         except Exception:
             # Cancel before accepting another request on a potentially active turn.
             try:
@@ -288,6 +294,8 @@ class GrokPersistentSession(GrokHeadlessSession):
                 self.rpc.close()
                 self.rpc = None
             raise
+        finally:
+            self._active_prompt_session = None
         elapsed = round(time.monotonic() - started, 3)
         self.memory_stream.append("utility-turn" if channel else "turn", provider="grok", session_id=session_id,
             payload={"user": prompt, "assistant": generated, "channel": channel, "elapsedSeconds": elapsed})

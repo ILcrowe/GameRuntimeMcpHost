@@ -26,7 +26,51 @@ DEFAULT_SYSTEM_PROMPT = (
     "the complete task and context. Follow its structured-output contract exactly."
 )
 
-ISOLATED_GROK_CONFIG = """[compat.claude]\nmcps = false\n\n[compat.cursor]\nmcps = false\n\n[subagents]\nenabled = false\n"""
+CONSENT_SCHEMA = "story-grok-session-consent/v1"
+
+
+class GrokConsentDenied(PermissionError):
+    """설정·인증·자식 프로세스에 접근하기 전에 반환하는 연결 거절입니다."""
+
+    def __init__(self, report):
+        self.report = report
+        super().__init__(report["status"])
+
+
+class GrokSessionConsent:
+    """한 세션의 동의만 메모리에 보관하며 접근 격리 증명으로 사용하지 않습니다."""
+
+    def __init__(self, decision="pending", scope=""):
+        self.scope = str(scope)
+        self.set_decision(decision)
+
+    def set_decision(self, decision):
+        if decision not in {"pending", "approved", "denied", "cancelled"}:
+            raise ValueError("지원하지 않는 세션 동의 상태입니다.")
+        self.decision = decision
+
+    def evaluate(self, *, expected_scope=None, transport="acp"):
+        if self.decision == "denied":
+            reason, status = "consent_denied", "이 세션 요청을 거절했습니다. 연결·로그인·모델 요청을 시작하지 않습니다."
+        elif self.decision == "cancelled":
+            reason, status = "consent_cancelled", "이 세션 동의를 취소했습니다. 새 요청을 차단하고 기존 연결과 대화 기록을 유지합니다."
+        elif self.decision != "approved" or not self.scope.strip():
+            reason, status = "consent_required", "이 세션 요청에 대한 명시적 동의가 필요합니다. 연결·로그인·모델 요청을 시작하지 않았습니다."
+        elif expected_scope is not None and self.scope != str(expected_scope):
+            reason, status = "consent_scope_mismatch", "동의한 세션과 요청한 세션이 다릅니다. 새 요청을 차단했습니다."
+        else:
+            # CLI 내부 접근을 강제하는 경계가 없어 동의만으로 시작을 허용하지 않습니다.
+            reason, status = "cli_access_isolation_unverified", "동의는 확인됐지만 파일·로컬 도구·네트워크 제한을 검증하지 못해 연결을 차단했습니다."
+        return {"schema": "story-grok-session-consent-check/v1", "consentSchema": CONSENT_SCHEMA,
+                "scope": self.scope, "decision": self.decision, "reason": reason, "status": status,
+                "launchAllowed": False, "configurationAccessStarted": False,
+                "credentialAccessStarted": False, "enforcedClientPermissionCallbacks": transport == "acp",
+                "cliAccessIsolationVerified": False, "modelRequests": 0, "authenticationRequests": 0}
+
+    def require_start(self, *, expected_scope=None, transport="acp"):
+        report = self.evaluate(expected_scope=expected_scope, transport=transport)
+        if not report["launchAllowed"]:
+            raise GrokConsentDenied(report)
 
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
@@ -53,20 +97,25 @@ class GrokHeadlessSession:
         reasoning_effort: str | None = None,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
         source_grok_home: Path | None = None,
+        workspace: Path | None = None,
+        consent: GrokSessionConsent | None = None,
         process_runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
         logger: Callable[[str], None] | None = None,
     ):
         self.state_root = Path(state_root).resolve()
         self.state_root.mkdir(parents=True, exist_ok=True)
-        self.workspace = self.state_root / "grok-workspace"
-        self.workspace.mkdir(parents=True, exist_ok=True)
-        self.runtime_grok_home = self.state_root / "grok-runtime-home"
+        self.workspace = Path(workspace).expanduser().resolve() if workspace is not None else self.state_root / "grok-workspace"
+        if workspace is None:
+            self.workspace.mkdir(parents=True, exist_ok=True)
+        self.legacy_runtime_grok_home = self.state_root / "grok-runtime-home"
         configured_source = os.environ.get("GAME_RUNTIME_GROK_SOURCE_HOME")
         self.source_grok_home = Path(
             source_grok_home
             if source_grok_home is not None
-            else configured_source or Path.home() / ".grok"
+            else configured_source or os.environ.get("GROK_HOME") or Path.home() / ".grok"
         ).expanduser().resolve()
+        self.runtime_grok_home = self.source_grok_home
+        self.consent = consent if consent is not None else GrokSessionConsent(scope=str(self.state_root))
         self.timeout_seconds = max(10, int(timeout_seconds))
         self.command = command or shutil.which("grok.cmd") or shutil.which("grok")
         if not self.command:
@@ -88,25 +137,10 @@ class GrokHeadlessSession:
         return self.grok_session_id
 
     def _prepare_runtime_environment(self) -> dict[str, str]:
-        self.runtime_grok_home.mkdir(parents=True, exist_ok=True)
-        (self.runtime_grok_home / "config.toml").write_text(
-            ISOLATED_GROK_CONFIG,
-            encoding="utf-8",
-        )
-
-        source_auth = self.source_grok_home / "auth.json"
-        runtime_auth = self.runtime_grok_home / "auth.json"
-        if source_auth.exists() and source_auth.resolve() != runtime_auth.resolve():
-            should_copy = not runtime_auth.exists()
-            if not should_copy:
-                try:
-                    should_copy = source_auth.stat().st_mtime_ns > runtime_auth.stat().st_mtime_ns
-                except OSError:
-                    should_copy = False
-            if should_copy:
-                shutil.copy2(source_auth, runtime_auth)
-                self.logger("copied cached Grok authentication into the isolated runtime home")
-
+        self._require_start_consent()
+        # 기존 폴더를 선택하기만 하며 설정과 자격증명 파일은 읽거나 쓰지 않습니다.
+        if not self.runtime_grok_home.is_dir() or not self.workspace.is_dir():
+            raise ValueError("기존 Grok 설정 폴더와 작업 폴더가 필요합니다.")
         child_env = os.environ.copy()
         child_env.update(
             {
@@ -119,6 +153,14 @@ class GrokHeadlessSession:
             }
         )
         return child_env
+
+    def _require_start_consent(self, *, expected_scope=None):
+        self.consent.require_start(expected_scope=str(self.state_root) if expected_scope is None else expected_scope,
+                                   transport="headless")
+
+    def set_consent(self, decision):
+        # 동의 취소는 공급자 세션 ID와 저장된 대화·기존 프로세스를 지우지 않습니다.
+        self.consent.set_decision(decision)
 
     def _build_command(
         self,
@@ -208,6 +250,7 @@ class GrokHeadlessSession:
         reasoning_effort: str | None = None,
         channel: str = "",
     ) -> tuple[dict[str, Any], str, dict[str, Any]]:
+        self._require_start_consent()
         mode = f"resume={session_id}" if session_id else "new-session"
         label = channel or "primary"
         self.logger(f"request start channel={label} {mode} chars={len(prompt)}")
