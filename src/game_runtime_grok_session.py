@@ -29,6 +29,64 @@ DEFAULT_SYSTEM_PROMPT = (
 CONSENT_SCHEMA = "story-grok-session-consent/v1"
 
 
+def story_runtime_profile(system_prompt=DEFAULT_SYSTEM_PROMPT):
+    # Empty toolConfig is rejected by Grok. Declare one known tool, then remove it.
+    # An empty `tools` allowlist means inherit all and must not stand in for this clamp.
+    return {"name": "storyllm-runtime", "description": "Game narrative responses only",
+            "promptMode": "full", "discoverSkills": False, "inheritSkills": False,
+            "skills": [], "agentsMd": False, "injectDefaultTools": False,
+            "toolConfig": {"tools": [{"id": "GrokBuild:read_file"}]},
+            "disallowedTools": ["read_file", "search_tool", "use_tool", "web_search", "x_search"],
+            "mcpServers": [], "mcpInheritance": "none", "maxTurns": 1,
+            "promptBody": system_prompt}
+
+
+def story_runtime_environment(grok_home, user_home):
+    if os.name != "nt":
+        raise RuntimeError("스킬 없는 Grok 실행은 현재 검증된 Windows 실행 경로에서 지원합니다.")
+    env = os.environ.copy()
+    # Keep normal cached authentication in GROK_HOME; redirect only the child's
+    # foreign user-config discovery. No auth.json inspection, copy or symlink.
+    env["GROK_HOME"] = str(grok_home)
+    env["USERPROFILE"] = str(user_home)
+    for vendor in ("CLAUDE", "CURSOR"):
+        for surface in ("SKILLS", "RULES", "AGENTS", "MCPS", "HOOKS", "SESSIONS"):
+            env[f"GROK_{vendor}_{surface}_ENABLED"] = "0"
+    env["GROK_CODEX_SESSIONS_ENABLED"] = "0"
+    for feature in ("MEMORY", "SUBAGENTS", "AGENT_DASHBOARD", "TOOL_SEARCH", "LSP_TOOLS", "WRITE_FILE", "WEB_FETCH"):
+        env[f"GROK_{feature}"] = "0"
+    return env
+
+
+def verify_story_runtime_inventory(raw):
+    """Verify non-profile discovery before starting ACP; never emit raw config."""
+    fields = ("skills", "plugins", "hooks", "projectInstructions", "mcpServers", "agents", "lspServers")
+    if not isinstance(raw, dict) or any(not isinstance(raw.get(key), list) for key in fields):
+        raise RuntimeError("Grok 실행 설정 목록이 불완전합니다.")
+    if any(not isinstance(item, dict) for key in fields for item in raw[key]):
+        raise RuntimeError("Grok 실행 설정 항목을 확인할 수 없습니다.")
+    compatibility = raw.get("externalCompat")
+    if not isinstance(compatibility, dict):
+        raise RuntimeError("Grok 호환 설정 목록이 불완전합니다.")
+    cells = compatibility.get("cells")
+    expected = {(vendor, surface) for vendor in ("claude", "cursor")
+                for surface in ("skills", "rules", "agents", "mcps", "hooks", "sessions")}
+    expected.add(("codex", "sessions"))
+    if not isinstance(cells, list) or len(cells) != len(expected) or {(c.get("vendor"), c.get("surface")) for c in cells if isinstance(c, dict)} != expected:
+        raise RuntimeError("Grok 호환 설정 목록이 불완전합니다.")
+    if any(not isinstance(c, dict) or c.get("enabled") is not False for c in cells):
+        raise RuntimeError("Grok 외부 설정 검색이 꺼지지 않았습니다.")
+    active = lambda item: item.get("disabled") is not True and item.get("enabled") is not False
+    counts = {"plugins": sum(active(p) for p in raw["plugins"]), "hooks": len(raw["hooks"]),
+              "instructions": sum(active(p) for p in raw["projectInstructions"]),
+              "mcp": sum(active(p) for p in raw["mcpServers"]), "lsp": len(raw["lspServers"])}
+    if any(counts.values()):
+        raise RuntimeError("Grok 실행 제한 실패: " + ", ".join(f"{key}={value}" for key, value in counts.items() if value))
+    return {"discoveredSkills": len(raw["skills"]), "discoveredAgents": len(raw["agents"]),
+            "externalComponents": counts, "compatibilityDisabled": True,
+            "cliVersion": str(raw.get("grokVersion") or "unknown")}
+
+
 class GrokConsentDenied(PermissionError):
     """설정·인증·자식 프로세스에 접근하기 전에 반환하는 연결 거절입니다."""
 
@@ -42,6 +100,8 @@ class GrokSessionConsent:
 
     def __init__(self, decision="pending", scope=""):
         self.scope = str(scope)
+        self.runtime_root = None
+        self.runtime_profile_digest = ""
         self.set_decision(decision)
 
     def set_decision(self, decision):
@@ -56,16 +116,43 @@ class GrokSessionConsent:
             reason, status = "consent_cancelled", "이 세션 동의를 취소했습니다. 새 요청을 차단하고 기존 연결과 대화 기록을 유지합니다."
         elif self.decision != "approved" or not self.scope.strip():
             reason, status = "consent_required", "이 세션 요청에 대한 명시적 동의가 필요합니다. 연결·로그인·모델 요청을 시작하지 않았습니다."
-        elif expected_scope is not None and self.scope != str(expected_scope):
+        elif expected_scope is not None and not self._includes_scope(expected_scope):
             reason, status = "consent_scope_mismatch", "동의한 세션과 요청한 세션이 다릅니다. 새 요청을 차단했습니다."
         else:
-            # CLI 내부 접근을 강제하는 경계가 없어 동의만으로 시작을 허용하지 않습니다.
-            reason, status = "cli_access_isolation_unverified", "동의는 확인됐지만 파일·로컬 도구·네트워크 제한을 검증하지 못해 연결을 차단했습니다."
+            reason, status = "runtime_profile_required", "동의를 확인했습니다. 스킬·도구 없는 전용 실행 설정을 확인합니다."
+        setup_allowed = reason == "runtime_profile_required"
+        launch_allowed = setup_allowed and transport == "acp" and bool(self.runtime_profile_digest)
+        if launch_allowed:
+            reason, status = "profiled_runtime_ready", "스킬·로컬 도구 없는 Grok 세션 실행 설정을 확인했습니다."
         return {"schema": "story-grok-session-consent-check/v1", "consentSchema": CONSENT_SCHEMA,
                 "scope": self.scope, "decision": self.decision, "reason": reason, "status": status,
-                "launchAllowed": False, "configurationAccessStarted": False,
+                "launchAllowed": launch_allowed, "setupAllowed": setup_allowed, "configurationAccessStarted": False,
                 "credentialAccessStarted": False, "enforcedClientPermissionCallbacks": transport == "acp",
-                "cliAccessIsolationVerified": False, "modelRequests": 0, "authenticationRequests": 0}
+                "cliAccessIsolationVerified": False, "runtimeProfileVerified": launch_allowed,
+                "modelRequests": 0, "authenticationRequests": 0}
+
+    def _includes_scope(self, expected_scope):
+        if self.scope == str(expected_scope):
+            return True
+        root = self.runtime_root or Path(self.scope).resolve()
+        try:
+            Path(expected_scope).resolve().relative_to(root)
+            return True
+        except (ValueError, OSError):
+            return False
+
+    def require_setup(self, *, expected_scope=None):
+        report = self.evaluate(expected_scope=expected_scope)
+        if not report["setupAllowed"]:
+            raise GrokConsentDenied(report)
+
+    def bind_runtime_profile(self, root, profile_digest):
+        # Bind child NPC scopes only underneath the approved game's state root.
+        self.require_setup(expected_scope=str(Path(root).resolve()))
+        if not profile_digest:
+            raise ValueError("Grok 전용 실행 설정의 검증값이 필요합니다.")
+        self.runtime_root = Path(self.scope).resolve()
+        self.runtime_profile_digest = profile_digest
 
     def require_start(self, *, expected_scope=None, transport="acp"):
         report = self.evaluate(expected_scope=expected_scope, transport=transport)

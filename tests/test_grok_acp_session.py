@@ -5,7 +5,26 @@ from unittest.mock import patch
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from game_runtime_grok_acp_session import GrokPersistentSession
+from game_runtime_grok_acp_session import GrokPersistentSession as RealGrokPersistentSession
+from game_runtime_grok_session import GrokSessionConsent
+
+
+class GrokPersistentSession(RealGrokPersistentSession):
+    """Transport-only fixture; real profile enforcement has its own tests."""
+
+    def __init__(self, state_root, **kwargs):
+        kwargs.setdefault("consent", GrokSessionConsent("approved", str(Path(state_root).resolve())))
+        super().__init__(state_root, **kwargs)
+
+    def prepare_runtime_profile(self):
+        self.consent.bind_runtime_profile(self.state_root, "test-only-profile")
+
+    def _prepare_runtime_environment(self):
+        self._require_start_consent()
+        return {}
+
+    def _verify_native_profile(self, session_id, **kwargs):
+        pass
 
 
 class FakeRpc:
@@ -280,13 +299,13 @@ class PersistentSessionTests(unittest.TestCase):
             restored.close()
 
     @patch("game_runtime_grok_acp_session.JsonRpcStdioClient", FakeRpc)
-    def test_current_grok_oauth_method_is_used_when_cached_token_is_not_advertised(self):
+    def test_advertised_oauth_never_starts_automatic_authentication(self):
         FakeRpc.auth_methods = [{"id": "grok.com"}]
         with tempfile.TemporaryDirectory() as root:
             session = GrokPersistentSession(Path(root), command="fake", source_grok_home=Path(root), logger=lambda _: None)
             session.start()
             auth_calls = [params for method, params in session.rpc.calls if method == "authenticate"]
-            self.assertEqual(auth_calls, [{"methodId": "grok.com", "_meta": {"headless": True}}])
+            self.assertEqual(auth_calls, [])
             session.close()
 
 
